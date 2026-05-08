@@ -195,6 +195,80 @@ def test_delete_dossier(runner: CliRunner, tmp_path: Path) -> None:
     assert second_delete.exit_code != 0
 
 
+def test_investigate_html_to_stdout(runner: CliRunner) -> None:
+    with patch("reckora.cli._build_orchestrator") as build_orch:
+        from reckora.orchestrator import Orchestrator
+
+        build_orch.return_value = Orchestrator([_FakeCollector()])
+        result = runner.invoke(
+            app,
+            ["investigate", "alice", "--kind", "username", "--format", "html"],
+        )
+    assert result.exit_code == 0, result.stdout
+    assert "<!DOCTYPE html>" in result.stdout
+    assert "username:alice" in result.stdout
+
+
+def test_investigate_writes_html_to_file(runner: CliRunner, tmp_path: Path) -> None:
+    out = tmp_path / "dossier.html"
+    with patch("reckora.cli._build_orchestrator") as build_orch:
+        from reckora.orchestrator import Orchestrator
+
+        build_orch.return_value = Orchestrator([_FakeCollector()])
+        result = runner.invoke(
+            app,
+            ["investigate", "alice", "--kind", "username", "--output", str(out)],
+        )
+    assert result.exit_code == 0, result.stdout
+    body = out.read_text(encoding="utf-8")
+    assert "<!DOCTYPE html>" in body
+    assert "alice" in body
+
+
+def test_investigate_unknown_format_errors(runner: CliRunner) -> None:
+    with patch("reckora.cli._build_orchestrator") as build_orch:
+        from reckora.orchestrator import Orchestrator
+
+        build_orch.return_value = Orchestrator([_FakeCollector()])
+        result = runner.invoke(
+            app,
+            ["investigate", "alice", "--kind", "username", "--format", "xml"],
+        )
+    assert result.exit_code != 0
+
+
+def test_show_html_format(runner: CliRunner, tmp_path: Path) -> None:
+    db_path = tmp_path / "reckora.db"
+    with patch("reckora.cli._build_orchestrator") as build_orch:
+        from reckora.orchestrator import Orchestrator
+
+        build_orch.return_value = Orchestrator([_FakeCollector()])
+        save_result = runner.invoke(
+            app,
+            [
+                "investigate",
+                "alice",
+                "--kind",
+                "username",
+                "--save",
+                "--db",
+                str(db_path),
+                "--format",
+                "json",
+            ],
+        )
+    assert save_result.exit_code == 0
+    saved_id = json.loads(save_result.stdout)["subject"]["id"]
+
+    show_result = runner.invoke(
+        app,
+        ["show", saved_id, "--db", str(db_path), "--format", "html"],
+    )
+    assert show_result.exit_code == 0
+    assert "<!DOCTYPE html>" in show_result.stdout
+    assert saved_id in show_result.stdout
+
+
 def test_kind_enum_round_trip() -> None:
     assert IdentifierType("username") is IdentifierType.USERNAME
     assert IdentifierType("domain") is IdentifierType.DOMAIN

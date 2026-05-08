@@ -12,13 +12,13 @@ The 10 layers of the Reckora vision and where each one lives in the codebase.
 | 6 | Confidence Scoring | done | Per-edge `confidence: float [0, 1]`, `reasons[]`, `supporting_evidence[]` (payload SHAs). |
 | 7 | Evidence Chain | partial | Source URL + timestamp + SHA-256 of canonicalised payload. Screenshot capture and archive.org snapshot — Phase 2. |
 | 8 | Graph | done (in-process) | NetworkX `MultiDiGraph[str]`. Neo4j adapter — Phase 2. |
-| 9 | Reporting | partial | JSON + Markdown dossier, persisted to SQLite via `reckora list` / `reckora show`. HTML / PDF dossier and timeline reconstruction — Phase 2. |
+| 9 | Reporting | partial | JSON + Markdown + self-contained HTML dossier, persisted to SQLite via `reckora list` / `reckora show`. PDF dossier and timeline reconstruction — Phase 2. |
 | 10 | Web UI | not yet | CLI only. Dashboard / graph viewer / report viewer — Phase 2. |
 
 ## Phase plan
 
 - **Phase 1 — MVP skeleton**: entity-first data model, evidence chain, three collectors, rule-based correlation engine, evidence-bounded AI reasoning, CLI dossier, CI matrix on Python 3.11 + 3.12.
-- **Phase 2 — Persistence & UI**: SQLite storage behind a repository seam (in progress — `reckora.persistence.SubjectRepository` with a SQLite implementation, `reckora investigate --save`, `reckora list / show / delete`), forensic screenshot capture, archive.org snapshot, HTML / PDF dossier, web UI with graph viewer, optional Neo4j adapter.
+- **Phase 2 — Persistence & UI**: SQLite storage behind a repository seam (in progress — `reckora.persistence.SubjectRepository` with a SQLite implementation, `reckora investigate --save`, `reckora list / show / delete`); self-contained HTML dossier (`--format html`, `.html` output) — landed; forensic screenshot capture, archive.org snapshot, PDF dossier, web UI with graph viewer, optional Neo4j adapter — pending.
 - **Phase 3 — Sensor expansion**: phone collector, crypto wallet collector (Etherscan / Blockstream), `sentence-transformers` bio embeddings, anomaly detector, breach lookup behind a feature flag.
 - **Phase 4 — Autonomous agents**: hypothesis-driven recursive identifier expansion gated by confidence floors, AI-proposed collector plans verified by rule-based engines.
 - **Phase 5 — Collaborative platform**: multi-user investigations, shared evidence library, role-based reporting.
