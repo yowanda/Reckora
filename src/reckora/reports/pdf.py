@@ -26,6 +26,7 @@ from reportlab.platypus import (
 )
 
 from ..models.entity import Edge, Subject, Trace
+from .timeline import TimelineEntry, build_timeline
 
 
 def _styles() -> dict[str, ParagraphStyle]:
@@ -188,6 +189,56 @@ def _trace_card(trace: Trace, styles: dict[str, ParagraphStyle]) -> KeepTogether
     return KeepTogether([title, _kv_table(rows, styles), Spacer(1, 6)])
 
 
+def _timeline_table(entries: list[TimelineEntry], styles: dict[str, ParagraphStyle]) -> Table:
+    header = [
+        Paragraph("<b>timestamp</b>", styles["body"]),
+        Paragraph("<b>source</b>", styles["body"]),
+        Paragraph("<b>identifier</b>", styles["body"]),
+        Paragraph("<b>evidence</b>", styles["body"]),
+    ]
+    data: list[list[Paragraph]] = [header]
+    for entry in entries:
+        timestamp_cell = Paragraph(
+            f"<font face='Courier'>{_esc(entry.timestamp.isoformat())}</font>",
+            styles["body"],
+        )
+        source_cell = Paragraph(_esc(entry.source.value), styles["body"])
+        identifier_cell = Paragraph(
+            f"<font face='Courier'>{_esc(entry.identifier_type.value)}:"
+            f"{_esc(entry.identifier_value)}</font>",
+            styles["body"],
+        )
+        evidence_cell = Paragraph(
+            f"<font face='Courier'>{_esc(entry.evidence_sha256_short)}…</font> "
+            f"<link href='{_esc(entry.source_url)}'>source</link>",
+            styles["body"],
+        )
+        data.append([timestamp_cell, source_cell, identifier_cell, evidence_cell])
+
+    table = Table(
+        data,
+        colWidths=[45 * mm, 30 * mm, 45 * mm, 45 * mm],
+        repeatRows=1,
+        hAlign="LEFT",
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef1f5")),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#cccccc")),
+                ("LINEBELOW", (0, 1), (-1, -1), 0.25, colors.HexColor("#eeeeee")),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    return table
+
+
 def _edge_table(edges: list[Edge], styles: dict[str, ParagraphStyle]) -> Table:
     header = [
         Paragraph("<b>edge</b>", styles["body"]),
@@ -282,6 +333,13 @@ def to_dossier_pdf(
             story.append(_trace_card(t, styles))
     else:
         story.append(Paragraph("no traces", styles["empty"]))
+
+    story.append(Paragraph("Timeline", styles["h2"]))
+    timeline = build_timeline(traces)
+    if timeline:
+        story.append(_timeline_table(timeline, styles))
+    else:
+        story.append(Paragraph("no events", styles["empty"]))
 
     story.append(Paragraph("Correlation edges", styles["h2"]))
     if edges:

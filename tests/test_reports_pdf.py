@@ -82,6 +82,17 @@ def test_pdf_grows_with_richer_dossier() -> None:
     assert len(full) > len(minimal)
 
 
+def test_pdf_grows_with_timeline_entries() -> None:
+    """Adding traces (which feed the timeline) makes the PDF bigger than an
+    edge-only dossier of the same shape."""
+    subject, traces, edges = _build_dossier()
+    edges_only = to_dossier_pdf(subject=subject, traces=[], edges=edges)
+    full = to_dossier_pdf(subject=subject, traces=traces, edges=edges)
+    assert full.startswith(PDF_MAGIC)
+    assert edges_only.startswith(PDF_MAGIC)
+    assert len(full) > len(edges_only)
+
+
 def test_pdf_renders_archive_url_when_present() -> None:
     subject, traces, edges = _build_dossier()
     snap = "https://web.archive.org/web/2026/https://api.github.com/users/alice"

@@ -144,6 +144,7 @@ async def create_investigation(
         created_at=summary_row.created_at,
         subject=payload_dict["subject"],
         traces=payload_dict["traces"],
+        timeline=payload_dict["timeline"],
         edges=payload_dict["edges"],
         ai=payload_dict["ai"],
     )
@@ -199,6 +200,7 @@ def get_subject(
         created_at=dossier.created_at,
         subject=payload_dict["subject"],
         traces=payload_dict["traces"],
+        timeline=payload_dict["timeline"],
         edges=payload_dict["edges"],
         ai=payload_dict["ai"],
     )
