@@ -79,6 +79,27 @@ link next to the live source URL.
 Set `OPENAI_API_KEY` to enable `--ai` (LLM-generated summary + hypotheses,
 evidence-bounded with `ev:<8-hex>` citations).
 
+## Phone identifiers
+
+Phone numbers are first-class identifiers. The bundled `PhoneCollector` is
+fully offline — it relies on `phonenumbers` (libphonenumber's Python port,
+which ships its own metadata database) so investigations stay deterministic
+and don't leak the number to any third party.
+
+```bash
+# International form (any locale):
+reckora investigate "+12025550123" --kind phone
+
+# National form needs a default region; pass it via the orchestrator if
+# you script Reckora as a library (the CLI defaults to "US").
+```
+
+The emitted trace normalises to: `e164`, `country_code`, `country_iso`,
+`country_name`, `region`, `carrier_name`, `line_type`
+(`mobile` / `fixed_line` / `voip` / `toll_free` / ...), `is_valid`,
+`is_possible`. Numbers that fail to parse never abort the investigation —
+the collector returns no traces and the orchestrator logs the miss.
+
 ## Optional Neo4j backend
 
 `SQLiteSubjectRepository` is the default store. For environments that want

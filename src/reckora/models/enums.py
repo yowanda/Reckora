@@ -27,6 +27,7 @@ class TraceSource(StrEnum):
     GITHUB_API = "github_api"
     WHOIS_RDAP = "whois_rdap"
     WEB_PROFILE = "web_profile"
+    PHONE_LIBPHONENUMBER = "phone_libphonenumber"
     USER_PROVIDED = "user_provided"
 
 

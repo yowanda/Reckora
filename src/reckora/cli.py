@@ -11,6 +11,7 @@ import typer
 
 from . import __version__
 from .collectors.github_api import GitHubCollector
+from .collectors.phone import PhoneCollector
 from .collectors.web_profile import WebProfileCollector
 from .collectors.whois_rdap import WhoisRdapCollector
 from .config import settings
@@ -52,6 +53,7 @@ def _build_orchestrator() -> Orchestrator:
             GitHubCollector(token=settings.github_token),
             WhoisRdapCollector(),
             WebProfileCollector(),
+            PhoneCollector(),
         ]
     )
 
