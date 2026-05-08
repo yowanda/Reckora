@@ -90,6 +90,22 @@ CREATE TABLE IF NOT EXISTS subject_assignees(
 
 CREATE INDEX IF NOT EXISTS idx_subject_assignees_user
     ON subject_assignees(user_id);
+
+CREATE TABLE IF NOT EXISTS comment_reactions(
+    comment_id INTEGER NOT NULL
+        REFERENCES subject_comments(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL
+        REFERENCES users(id) ON DELETE CASCADE,
+    reaction_key TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (comment_id, user_id, reaction_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_comment_reactions_comment
+    ON comment_reactions(comment_id);
+
+CREATE INDEX IF NOT EXISTS idx_comment_reactions_user
+    ON comment_reactions(user_id);
 """
 
 
@@ -113,6 +129,26 @@ class AssigneeRow:
     user_id: int
     assigned_by: int | None
     assigned_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReactionRow:
+    """One row in :meth:`AccessRepository.list_reactions`.
+
+    A row models a single ``(comment, user, reaction_key)`` triple —
+    the same user is allowed to leave multiple distinct reactions on
+    one comment (e.g. ``+1`` *and* ``heart``) but cannot stack the
+    same key twice. The route layer is responsible for projecting
+    these into the ``[{key, count, users[], me_reacted}]`` summary
+    surfaced to the API; the repository deliberately stays at the
+    row-level granularity so other consumers (e.g. an audit export)
+    can pivot however they need.
+    """
+
+    comment_id: int
+    user_id: int
+    reaction_key: str
+    created_at: str
 
 
 class AccessRepository:
@@ -390,6 +426,87 @@ class AccessRepository:
         )
         self._conn.commit()
         return cur.rowcount > 0
+
+    # -- comment reactions ------------------------------------------------
+
+    def add_reaction(
+        self,
+        comment_id: int,
+        user_id: int,
+        reaction_key: str,
+        *,
+        created_at: str,
+    ) -> bool:
+        """Insert a ``(comment, user, key)`` reaction row idempotently.
+
+        Returns ``True`` when a new row was inserted, ``False`` if the
+        same triple already existed (i.e. the actor double-clicked the
+        button). The PUT endpoint surfaces both as 200 to the client —
+        the bool is purely for the route layer's test seam — but
+        keeping the distinction at the repository keeps the audit
+        story honest if we ever start logging deltas.
+        """
+        cur = self._conn.execute(
+            """
+            INSERT OR IGNORE INTO comment_reactions(
+                comment_id, user_id, reaction_key, created_at
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (comment_id, user_id, reaction_key, created_at),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def remove_reaction(
+        self,
+        comment_id: int,
+        user_id: int,
+        reaction_key: str,
+    ) -> bool:
+        """Delete a single ``(comment, user, key)`` reaction row.
+
+        Returns ``True`` if a row was actually removed, ``False`` if
+        the actor never had that reaction. The route layer translates
+        the latter into a 404 so a stale optimistic UI doesn't pretend
+        a no-op succeeded.
+        """
+        cur = self._conn.execute(
+            """
+            DELETE FROM comment_reactions
+            WHERE comment_id = ? AND user_id = ? AND reaction_key = ?
+            """,
+            (comment_id, user_id, reaction_key),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def list_reactions(self, comment_id: int) -> list[ReactionRow]:
+        """Return every reaction on ``comment_id`` (oldest first).
+
+        Ordering is ``(reaction_key ASC, created_at ASC)`` so the
+        same emoji always groups together and within an emoji group
+        the earliest reactor leads — good defaults for a "who
+        reacted first" UI without forcing the route to re-sort.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT comment_id, user_id, reaction_key, created_at
+            FROM comment_reactions
+            WHERE comment_id = ?
+            ORDER BY reaction_key ASC, datetime(created_at) ASC, user_id ASC
+            """,
+            (comment_id,),
+        ).fetchall()
+        return [
+            ReactionRow(
+                comment_id=int(cid),
+                user_id=int(uid),
+                reaction_key=str(key),
+                created_at=str(ts),
+            )
+            for cid, uid, key, ts in rows
+        ]
 
     # -- visibility helpers ----------------------------------------------
 
