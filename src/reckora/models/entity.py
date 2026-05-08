@@ -37,6 +37,12 @@ class Evidence(BaseModel):
     `archive_url` is an optional pointer to an out-of-band durable copy of the
     source page (e.g. an archive.org Wayback snapshot) so the chain remains
     auditable even if the live page disappears.
+
+    `screenshot_path` is an optional pointer to a forensic PNG render of the
+    source page captured at fetch time (typically a filesystem path written by
+    a headless browser, or a URL exposed by the API server). It complements
+    ``archive_url`` for cases where the visual layout matters as much as the
+    raw payload.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -46,6 +52,7 @@ class Evidence(BaseModel):
     payload_sha256: str
     raw_payload: dict[str, Any] | None = None
     archive_url: str | None = None
+    screenshot_path: str | None = None
 
 
 class Trace(BaseModel):

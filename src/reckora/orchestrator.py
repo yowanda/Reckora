@@ -20,6 +20,7 @@ from collections.abc import Iterable
 from .collectors.base import Collector
 from .correlation.engine import correlate
 from .evidence.archive import Archiver, augment_traces_with_archive
+from .evidence.screenshot import Screenshotter, augment_traces_with_screenshot
 from .models.entity import Edge, Identifier, Subject, Trace
 
 log = logging.getLogger(__name__)
@@ -37,12 +38,17 @@ class Orchestrator:
         *,
         extra_identifiers: list[Identifier] | None = None,
         archiver: Archiver | None = None,
+        screenshotter: Screenshotter | None = None,
     ) -> tuple[Subject, list[Trace], list[Edge]]:
         """Collect Traces for `seed` (+ optional extras) and correlate them.
 
         When ``archiver`` is provided, every unique source URL across the
         collected traces is archived (best-effort) and the resulting snapshot
         URL is attached to each trace's :class:`Evidence.archive_url`.
+
+        When ``screenshotter`` is provided, every unique source URL is also
+        rendered to a PNG (best-effort) and the resulting path is attached to
+        each trace's :class:`Evidence.screenshot_path`.
         """
         identifiers: list[Identifier] = [seed, *(extra_identifiers or [])]
 
@@ -62,6 +68,8 @@ class Orchestrator:
 
         if archiver is not None:
             traces = await augment_traces_with_archive(traces, archiver)
+        if screenshotter is not None:
+            traces = await augment_traces_with_screenshot(traces, screenshotter)
 
         edges = correlate(traces)
         subject = Subject(

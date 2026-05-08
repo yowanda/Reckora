@@ -28,6 +28,13 @@ class InvestigationRequest(BaseModel):
         default=False,
         description="Mint a Wayback Machine snapshot per evidence URL (best-effort, slow).",
     )
+    screenshot: bool = Field(
+        default=False,
+        description=(
+            "Capture a forensic PNG of each evidence URL via headless Chromium "
+            "(requires the 'screenshots' extra; off by default)."
+        ),
+    )
     ai: bool = Field(
         default=False,
         description="Run the LLM reasoning layer (summary + hypotheses).",

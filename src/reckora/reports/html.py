@@ -92,6 +92,10 @@ ul.idents li { display: inline-block; margin: .15rem .3rem .15rem 0;
     <dt>archive</dt>
     <dd><a href="{{ t.evidence.archive_url }}">{{ t.evidence.archive_url }}</a></dd>
     {% endif %}
+    {% if t.evidence.screenshot_path %}
+    <dt>screenshot</dt>
+    <dd><a href="{{ t.evidence.screenshot_path }}">{{ t.evidence.screenshot_path }}</a></dd>
+    {% endif %}
     {% for k, v in t.fields.items() if v not in (None, "", []) %}
     <dt>{{ k }}</dt>
     <dd><code>{{ v }}</code></dd>

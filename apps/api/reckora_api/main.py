@@ -8,9 +8,11 @@ can pass a fully-resolved :class:`APISettings`.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from reckora.collectors.github_api import GitHubCollector
 from reckora.collectors.web_profile import WebProfileCollector
@@ -75,6 +77,17 @@ def create_app(
 
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(investigations_router, prefix="/api/v1")
+
+    # Mount captured screenshots so the frontend can render them inline. The
+    # directory is created lazily — the app must not crash if screenshots are
+    # disabled and the directory has never been written to.
+    screenshots_dir = Path(s.screenshots_dir)
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
+    app.mount(
+        s.screenshots_url_prefix,
+        StaticFiles(directory=str(screenshots_dir)),
+        name="screenshots",
+    )
 
     @app.get("/healthz", tags=["meta"])
     def healthz() -> dict[str, str]:

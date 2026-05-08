@@ -58,8 +58,23 @@ reckora investigate octocat --kind username --archive
 ```
 
 Each `Trace.evidence.archive_url` then points at the durable snapshot, and
-the dossier renderers (markdown, JSON, HTML) include it next to the live
-source URL.
+the dossier renderers (markdown, JSON, HTML, PDF) include it next to the
+live source URL.
+
+Capture a forensic full-page PNG of every evidence URL via headless
+Chromium so the dossier can be reviewed offline (best-effort; off by
+default because it pulls a browser binary):
+
+```bash
+uv sync --extra screenshots
+uv run playwright install chromium
+reckora investigate octocat --kind username --screenshot \
+    --screenshots-dir ./screenshots
+```
+
+Each `Trace.evidence.screenshot_path` then points at the captured PNG, and
+all four dossier renderers (markdown, JSON, HTML, PDF) include the path /
+link next to the live source URL.
 
 Set `OPENAI_API_KEY` to enable `--ai` (LLM-generated summary + hypotheses,
 evidence-bounded with `ev:<8-hex>` citations).
@@ -110,7 +125,7 @@ except `/auth/register` and `/auth/token`):
 | POST | `/auth/register` | create a user (username + password ≥ 8 chars) |
 | POST | `/auth/token` | OAuth2-form login → JWT access token |
 | GET  | `/auth/me` | current user identity |
-| POST | `/investigations` | run orchestrator + persist (`archive`, `ai` flags) |
+| POST | `/investigations` | run orchestrator + persist (`archive`, `screenshot`, `ai` flags) |
 | GET  | `/subjects` | list saved dossiers (`?limit=`) |
 | GET  | `/subjects/{id}` | full saved dossier as JSON |
 | GET  | `/subjects/{id}/dossier?format=html\|json\|md\|pdf` | render dossier |
@@ -126,6 +141,8 @@ Configuration (env vars, all optional except the secret):
 | `RECKORA_API_CORS_ORIGINS` | `http://localhost:5173` | comma-separated allow-list |
 | `RECKORA_API_DOCS_ENABLED` | `true` | toggle `/docs` and `/openapi.json` |
 | `RECKORA_DB_PATH` | `./reckora.db` | shared SQLite file (CLI + API) |
+| `RECKORA_API_SCREENSHOTS_DIR` | `screenshots` | filesystem dir for captured PNGs |
+| `RECKORA_API_SCREENSHOTS_URL_PREFIX` | `/screenshots` | URL prefix at which the API serves PNGs |
 
 ## Roadmap
 

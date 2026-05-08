@@ -172,6 +172,14 @@ def _trace_card(trace: Trace, styles: dict[str, ParagraphStyle]) -> KeepTogether
                 f"{_esc(trace.evidence.archive_url)}</link>",
             )
         )
+    if trace.evidence.screenshot_path:
+        rows.append(
+            (
+                "screenshot",
+                f"<link href='{_esc(trace.evidence.screenshot_path)}'>"
+                f"{_esc(trace.evidence.screenshot_path)}</link>",
+            )
+        )
     for k, v in trace.fields.items():
         if v in (None, "", []):
             continue

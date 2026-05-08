@@ -40,6 +40,8 @@ def to_dossier_md(
             lines.append(f"- source: {t.evidence.source_url}")
             if t.evidence.archive_url:
                 lines.append(f"- archive: {t.evidence.archive_url}")
+            if t.evidence.screenshot_path:
+                lines.append(f"- screenshot: {t.evidence.screenshot_path}")
             for k, v in t.fields.items():
                 if v in (None, "", []):
                     continue
