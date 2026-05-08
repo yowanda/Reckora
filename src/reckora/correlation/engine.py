@@ -14,11 +14,23 @@ from itertools import combinations
 from ..models.entity import Edge, Identifier, Trace
 from ..models.enums import EdgeKind, IdentifierType
 from .confidence import ConfidenceContribution, combine
+from .embeddings import BioEmbedder
 from .rules import avatar_phash, bio_similarity, timezone_overlap, username_mutation
 
 
-def correlate(traces: Iterable[Trace]) -> list[Edge]:
-    """Return Edges for every Trace pair that any rule fires on."""
+def correlate(
+    traces: Iterable[Trace],
+    *,
+    bio_embedder: BioEmbedder | None = None,
+) -> list[Edge]:
+    """Return Edges for every Trace pair that any rule fires on.
+
+    ``bio_embedder`` is plumbed through to the bio-similarity rule so the
+    caller can opt into dense-vector cosine similarity (typically backed
+    by ``sentence-transformers`` via the ``[embeddings]`` extra) instead
+    of the default lexical token-cosine baseline. Passing ``None`` keeps
+    the historical behaviour and is dependency-free.
+    """
     trace_list = list(traces)
     edges: list[Edge] = []
     for ta, tb in combinations(trace_list, 2):
@@ -44,6 +56,7 @@ def correlate(traces: Iterable[Trace]) -> list[Edge]:
         c = bio_similarity.score(
             bio_a if isinstance(bio_a, str) else None,
             bio_b if isinstance(bio_b, str) else None,
+            embedder=bio_embedder,
         )
         if c is not None:
             edges.append(_edge(ia, ib, EdgeKind.SIMILAR_BIO, [c], ev_hashes))

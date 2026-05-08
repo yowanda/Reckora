@@ -63,6 +63,14 @@ screenshots = [
 neo4j = [
     "neo4j>=5.0",
 ]
+# Dense-vector bio embeddings via `sentence-transformers`. Off the default
+# install path because the upstream library pulls a sizeable torch /
+# transformers stack; opt in with `uv sync --extra embeddings` when you
+# want the bio-similarity correlation rule to run on semantic similarity
+# instead of the lexical token-cosine baseline.
+embeddings = [
+    "sentence-transformers>=2.7",
+]
 
 [project.scripts]
 reckora = "reckora.cli:app"
@@ -140,6 +148,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["phonenumbers", "phonenumbers.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["sentence_transformers"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

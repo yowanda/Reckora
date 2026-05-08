@@ -301,6 +301,91 @@ The emitted trace normalises to: `e164`, `country_code`, `country_iso`,
 `is_possible`. Numbers that fail to parse never abort the investigation —
 the collector returns no traces and the orchestrator logs the miss.
 
+## Embedding-based bio similarity
+
+The default `bio_similarity` correlation rule runs on lexical
+token-cosine — fast, dependency-free, and hermetic for tests, but blind
+to synonyms ("infosec engineer" ↔ "security researcher" share zero
+tokens despite describing the same role). For deeper semantic matches,
+Reckora ships an optional `[embeddings]` extra that pulls in
+`sentence-transformers`:
+
+```bash
+uv sync --extra embeddings
+```
+
+Wire an embedder through `correlate(traces, bio_embedder=...)` (or
+through `AgentLoop(... bio_embedder=...)`) and the bio rule swaps token
+cosine for dense-vector cosine on the same `EdgeKind.SIMILAR_BIO`:
+
+```python
+from reckora.correlation import SentenceTransformerEmbedder, correlate
+
+# Lazy-loads sentence-transformers/all-MiniLM-L6-v2 on first encode().
+edges = correlate(traces, bio_embedder=SentenceTransformerEmbedder())
+```
+
+`BioEmbedder` is a runtime-checkable `Protocol`, so any object exposing
+`embed_one(text: str) -> list[float]` slots in — Reckora does not
+hard-code the `sentence-transformers` import path on a host that did
+not opt in to the extra. If an embedder declines a string (returns
+`[]`), the bio rule transparently falls back to its lexical baseline
+rather than producing a spurious zero score.
+
+## Autonomous agent loop (Phase 4)
+
+`AgentLoop` (`reckora.agent.AgentLoop`) drives Reckora's collect →
+correlate pipeline recursively: starting from a seed identifier it (1)
+runs the orchestrator once to bootstrap a working set, (2) asks the
+reasoning layer to propose follow-up identifiers worth investigating
+(each citing the `ev:<8-hex>` payload prefixes that justify it), (3)
+runs the proposed plan through a rule-based `Verifier` that drops
+malformed, unsupported, already-visited, or unevidenced proposals,
+and (4) re-correlates the full trace set and retains only the
+candidates whose strongest correlation edge to the prior graph is at
+or above the configured `confidence_floor`. The loop terminates as
+soon as an iteration produces no retained identifiers, or
+`max_iterations` is reached:
+
+```python
+import asyncio
+from reckora.agent import AgentLoop
+from reckora.correlation import SentenceTransformerEmbedder
+from reckora.models.entity import Identifier
+from reckora.models.enums import IdentifierType
+from reckora.orchestrator import Orchestrator
+from reckora.reasoning.client import ReasoningClient
+
+orch = Orchestrator([...])  # the same collectors the CLI uses
+client = ReasoningClient()  # honours OPENAI_API_KEY *or* a `reckora auth login`
+loop = AgentLoop(
+    orch,
+    client,
+    max_iterations=3,
+    confidence_floor=0.5,
+    bio_embedder=SentenceTransformerEmbedder(),  # optional
+)
+result = asyncio.run(loop.run(Identifier(type=IdentifierType.USERNAME, value="alice")))
+
+for step in result.transcript:
+    print(step.iteration, step.accepted, step.retained, step.confidence_dropped)
+```
+
+Two gates protect callers from a misbehaving LLM: the verifier rejects
+proposals that don't parse, name unknown identifier kinds, are already
+in the visited set, point at unsupported collectors, or cite no real
+evidence; the post-collection confidence-floor gate then drops any
+*verifier-accepted* identifier whose strongest correlation edge to the
+existing graph is below `confidence_floor`. The loop's
+`AgentLoopResult.transcript` records the raw plan, every rejection,
+every confidence-floor drop and every retained trace per iteration so
+investigators can audit *why* the agent expanded (or refused to
+expand) the search space.
+
+The agent layer reuses the same `ReasoningClient` the dossier uses, so
+it runs unchanged on either `OPENAI_API_KEY` or a `reckora auth login`
+ChatGPT OAuth credential.
+
 ## Optional Neo4j backend
 
 `SQLiteSubjectRepository` is the default store. For environments that want
