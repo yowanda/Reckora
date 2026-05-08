@@ -210,6 +210,41 @@ treated as no-ops; quota / rate-limit responses are surfaced upstream
 so the orchestrator's per-collector logger records them once and the
 investigation continues without this collector's data.
 
+## Solana wallet identifiers
+
+For Solana mainnet-beta, Reckora ships a `SolanaChainCollector` that
+resolves a `wallet` identifier against any Solana JSON-RPC endpoint. It
+defaults to the public `https://api.mainnet-beta.solana.com` cluster
+(free, key-less) and accepts a dedicated provider URL — Helius,
+QuickNode, Triton — via `SOLANA_RPC_URL` for production / batch
+workloads. Like the EVM collector this is *not* a feature flag.
+
+```bash
+# A well-known mainnet-beta address (Solana Foundation):
+reckora investigate "GThUX1Atko4tqhN2NaiTazWSeFWMuiUiswQrAogTcjQ" --kind wallet
+```
+
+The emitted trace normalises to a flat schema the dossier renderers can
+read without parsing the raw envelope at render time:
+`address` (base58 ed25519 pubkey, case preserved), `chain`
+(`"solana"`), `network` (`"mainnet-beta"`), `address_format`
+(`"ed25519"` — shared with any future Sui / Aptos collector that also
+leans on ed25519 keys), `balance_lamports`, `balance_sol`
+(string-formatted with full 9-decimal precision, no float drift),
+`has_recent_activity`, `latest_signature`, `latest_block_time` (UTC ISO
+8601, normalised from Solana's unix `blockTime`), `is_active`.
+
+The collector silently no-ops on `wallet` strings that aren't Solana-
+shaped (length disjoint from Bitcoin base58, doesn't start with `0x`
+or `bc1`) so the BTC and ETH adapters and any future TRON / Cosmos
+collector can coexist on `IdentifierType.WALLET`. Two RPC calls
+(`getBalance` + `getSignaturesForAddress` with `limit=1`) are combined
+into a single Trace; the raw envelopes are dropped from evidence
+(`keep_raw=False`) and the SHA-256 of the canonicalised combined
+payload is preserved as the audit anchor. `Invalid params` errors are
+treated as no-ops; rate-limit responses are surfaced upstream so the
+orchestrator's per-collector logger records them once.
+
 ## Phone identifiers
 
 Phone numbers are first-class identifiers. The bundled `PhoneCollector` is
@@ -332,6 +367,7 @@ Configuration (env vars, all optional except the secret):
 | `RECKORA_API_SCREENSHOTS_URL_PREFIX` | `/screenshots` | URL prefix at which the API serves PNGs |
 | `HIBP_API_KEY` | _(unset)_ | Have I Been Pwned API key (enables `--breach` / `breach: true`) |
 | `ETHERSCAN_API_KEY` | _(unset)_ | Etherscan API key — optional; lifts the anonymous tier's rate limit for the Ethereum wallet collector |
+| `SOLANA_RPC_URL` | `https://api.mainnet-beta.solana.com` | Solana JSON-RPC endpoint — point at a dedicated provider (Helius / QuickNode / Triton) for production rate limits |
 
 ## Roadmap
 

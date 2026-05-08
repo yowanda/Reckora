@@ -47,6 +47,16 @@ class Settings(BaseSettings):
     # feature flag — the collector is always wired into the orchestrator
     # and the key is purely a rate-limit lever.
     etherscan_api_key: str | None = Field(default=None, validation_alias="ETHERSCAN_API_KEY")
+    # Solana JSON-RPC endpoint. Defaults to the public mainnet-beta
+    # cluster (free, key-less, fine for OSINT-style account lookups).
+    # For production / batch workloads point this at a dedicated
+    # provider URL (Helius, QuickNode, Triton) — same shape, higher
+    # rate limit. Like ``ETHERSCAN_API_KEY`` this is *not* a feature
+    # flag; the Solana wallet collector is always wired in.
+    solana_rpc_url: str = Field(
+        default="https://api.mainnet-beta.solana.com",
+        validation_alias="SOLANA_RPC_URL",
+    )
 
 
 settings = Settings()

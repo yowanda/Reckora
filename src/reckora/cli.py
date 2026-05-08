@@ -15,6 +15,7 @@ from .collectors.github_api import GitHubCollector
 from .collectors.phone import PhoneCollector
 from .collectors.wallet_btc import BitcoinChainCollector
 from .collectors.wallet_eth import EthereumChainCollector
+from .collectors.wallet_sol import SolanaChainCollector
 from .collectors.web_profile import WebProfileCollector
 from .collectors.whois_rdap import WhoisRdapCollector
 from .config import settings
@@ -58,6 +59,7 @@ def _build_orchestrator(*, breach_enabled: bool = False) -> Orchestrator:
         PhoneCollector(),
         BitcoinChainCollector(),
         EthereumChainCollector(api_key=settings.etherscan_api_key),
+        SolanaChainCollector(rpc_url=settings.solana_rpc_url),
     ]
     if breach_enabled:
         # Feature-flagged opt-in: only added when --breach is set so that

@@ -11,6 +11,7 @@ from .github_api import GitHubCollector
 from .phone import PhoneCollector
 from .wallet_btc import BitcoinChainCollector
 from .wallet_eth import EthereumChainCollector
+from .wallet_sol import SolanaChainCollector
 from .web_profile import WebProfileCollector
 from .whois_rdap import WhoisRdapCollector
 
@@ -20,6 +21,7 @@ __all__ = [
     "EthereumChainCollector",
     "GitHubCollector",
     "PhoneCollector",
+    "SolanaChainCollector",
     "WebProfileCollector",
     "WhoisRdapCollector",
 ]
