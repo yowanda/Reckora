@@ -27,6 +27,7 @@ class TraceSource(StrEnum):
     GITHUB_API = "github_api"
     HACKERNEWS_API = "hackernews_api"
     KEYBASE_API = "keybase_api"
+    GRAVATAR_API = "gravatar_api"
     WHOIS_RDAP = "whois_rdap"
     WEB_PROFILE = "web_profile"
     PHONE_LIBPHONENUMBER = "phone_libphonenumber"
