@@ -39,6 +39,13 @@ class InvestigationRequest(BaseModel):
         default=False,
         description="Run the LLM reasoning layer (summary + hypotheses).",
     )
+    breach: bool = Field(
+        default=False,
+        description=(
+            "Enable the Have I Been Pwned breach-lookup collector for "
+            "email identifiers (requires HIBP_API_KEY; off by default)."
+        ),
+    )
 
 
 class SubjectSummary(BaseModel):
