@@ -20,6 +20,7 @@ from .persistence import SQLiteSubjectRepository
 from .reasoning.client import ReasoningClient
 from .reasoning.hypothesize import hypothesize
 from .reasoning.summarize import summarize
+from .reports.html import to_dossier_html
 from .reports.json_export import to_dossier_json
 from .reports.markdown import to_dossier_md
 
@@ -49,6 +50,53 @@ def _build_orchestrator() -> Orchestrator:
             WebProfileCollector(),
         ]
     )
+
+
+def _render_dossier(
+    fmt: str,
+    *,
+    subject: Subject,
+    traces: list[Trace],
+    edges: list[Edge],
+    summary: str | None,
+    hypotheses: str | None,
+) -> str:
+    """Render a dossier in one of the supported formats."""
+    if fmt == "json":
+        return to_dossier_json(
+            subject=subject,
+            traces=traces,
+            edges=edges,
+            summary=summary,
+            hypotheses=hypotheses,
+        )
+    if fmt == "html":
+        return to_dossier_html(
+            subject=subject,
+            traces=traces,
+            edges=edges,
+            summary=summary,
+            hypotheses=hypotheses,
+        )
+    if fmt == "md":
+        return to_dossier_md(
+            subject=subject,
+            traces=traces,
+            edges=edges,
+            summary=summary,
+            hypotheses=hypotheses,
+        )
+    raise typer.BadParameter(f"unknown format {fmt!r}; expected one of: md, json, html")
+
+
+def _format_from_path(path: Path) -> str:
+    """Infer dossier format from output file extension."""
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return "json"
+    if suffix in {".html", ".htm"}:
+        return "html"
+    return "md"
 
 
 async def _run(
@@ -99,11 +147,15 @@ def investigate(
     ] = "username",
     output: Annotated[
         Path | None,
-        typer.Option("--output", "-o", help="Write the dossier to a file (.json or .md)."),
+        typer.Option(
+            "--output",
+            "-o",
+            help="Write the dossier to a file (.json, .md, or .html).",
+        ),
     ] = None,
     fmt: Annotated[
         str,
-        typer.Option("--format", "-f", help="Stdout format: md|json."),
+        typer.Option("--format", "-f", help="Stdout format: md|json|html."),
     ] = "md",
     ai: Annotated[
         bool,
@@ -154,46 +206,28 @@ def investigate(
         typer.echo(f"saved {subject.id}", err=True)
 
     if output is not None:
-        if output.suffix.lower() == ".json":
-            payload = to_dossier_json(
-                subject=subject,
-                traces=traces,
-                edges=edges,
-                summary=summary_md,
-                hypotheses=hypotheses_md,
-            )
-        else:
-            payload = to_dossier_md(
-                subject=subject,
-                traces=traces,
-                edges=edges,
-                summary=summary_md,
-                hypotheses=hypotheses_md,
-            )
+        payload = _render_dossier(
+            _format_from_path(output),
+            subject=subject,
+            traces=traces,
+            edges=edges,
+            summary=summary_md,
+            hypotheses=hypotheses_md,
+        )
         output.write_text(payload, encoding="utf-8")
         typer.echo(f"wrote {output}")
         return
 
-    if fmt == "json":
-        typer.echo(
-            to_dossier_json(
-                subject=subject,
-                traces=traces,
-                edges=edges,
-                summary=summary_md,
-                hypotheses=hypotheses_md,
-            )
+    typer.echo(
+        _render_dossier(
+            fmt,
+            subject=subject,
+            traces=traces,
+            edges=edges,
+            summary=summary_md,
+            hypotheses=hypotheses_md,
         )
-    else:
-        typer.echo(
-            to_dossier_md(
-                subject=subject,
-                traces=traces,
-                edges=edges,
-                summary=summary_md,
-                hypotheses=hypotheses_md,
-            )
-        )
+    )
 
 
 @app.command(name="list")
@@ -230,7 +264,7 @@ def list_dossiers(
 @app.command()
 def show(
     subject_id: Annotated[str, typer.Argument(help="Subject id (e.g. subj-abcdef123456).")],
-    fmt: Annotated[str, typer.Option("--format", "-f", help="Output format: md|json.")] = "md",
+    fmt: Annotated[str, typer.Option("--format", "-f", help="Output format: md|json|html.")] = "md",
     db: Annotated[
         Path | None,
         typer.Option("--db", help="SQLite database path."),
@@ -242,26 +276,16 @@ def show(
     if dossier is None:
         raise typer.BadParameter(f"no saved dossier with id {subject_id!r}")
 
-    if fmt == "json":
-        typer.echo(
-            to_dossier_json(
-                subject=dossier.subject,
-                traces=dossier.traces,
-                edges=dossier.edges,
-                summary=dossier.summary,
-                hypotheses=dossier.hypotheses,
-            )
+    typer.echo(
+        _render_dossier(
+            fmt,
+            subject=dossier.subject,
+            traces=dossier.traces,
+            edges=dossier.edges,
+            summary=dossier.summary,
+            hypotheses=dossier.hypotheses,
         )
-    else:
-        typer.echo(
-            to_dossier_md(
-                subject=dossier.subject,
-                traces=dossier.traces,
-                edges=dossier.edges,
-                summary=dossier.summary,
-                hypotheses=dossier.hypotheses,
-            )
-        )
+    )
 
 
 @app.command()
