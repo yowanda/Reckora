@@ -45,6 +45,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
+from ..evidence.anchor import Anchor
 from ..models.entity import Edge, Identifier, Subject, Trace
 from ..models.enums import IdentifierType
 from .repository import SavedDossier, SavedDossierSummary
@@ -93,6 +94,7 @@ class Neo4jSubjectRepository:
         edges: list[Edge],
         summary: str | None = None,
         hypotheses: str | None = None,
+        anchor: Anchor | None = None,
         created_at: datetime | None = None,
     ) -> SavedDossierSummary:
         ts = (created_at or datetime.now(UTC)).astimezone(UTC).isoformat()
@@ -127,6 +129,7 @@ class Neo4jSubjectRepository:
                     "created_at": ts,
                     "summary": summary,
                     "hypotheses": hypotheses,
+                    "anchor_json": anchor.model_dump_json() if anchor is not None else None,
                     "identifiers": identifiers_payload,
                     "traces": traces_payload,
                     "edges": edges_payload,
@@ -141,6 +144,7 @@ class Neo4jSubjectRepository:
             edge_count=len(edges),
             has_summary=summary is not None,
             has_hypotheses=hypotheses is not None,
+            has_anchor=anchor is not None,
         )
 
     def get(self, subject_id: str) -> SavedDossier | None:
@@ -158,6 +162,8 @@ class Neo4jSubjectRepository:
         ]
         traces = [Trace.model_validate_json(t) for t in data["traces"]]
         edges = [Edge.model_validate_json(e) for e in data["edges"]]
+        anchor_json = data.get("anchor_json")
+        anchor = Anchor.model_validate_json(anchor_json) if anchor_json else None
         subject = Subject(
             id=subject_id,
             seed_identifier=seed,
@@ -172,6 +178,7 @@ class Neo4jSubjectRepository:
             created_at=datetime.fromisoformat(data["created_at"]),
             summary=data["summary"],
             hypotheses=data["hypotheses"],
+            anchor=anchor,
         )
 
     def list_recent(self, limit: int = 20) -> list[SavedDossierSummary]:
@@ -196,6 +203,7 @@ class Neo4jSubjectRepository:
                     edge_count=int(row["edge_count"]),
                     has_summary=row["summary_md"] is not None,
                     has_hypotheses=row["hypotheses_md"] is not None,
+                    has_anchor=row["anchor_json"] is not None,
                 )
             )
         return out
@@ -224,7 +232,8 @@ def _save_tx(tx: Any, payload: dict[str, Any]) -> None:
             sub.identifiers_json = $identifiers_json,
             sub.created_at = $created_at,
             sub.summary_md = $summary,
-            sub.hypotheses_md = $hypotheses
+            sub.hypotheses_md = $hypotheses,
+            sub.anchor_json = $anchor_json
         """,
         id=sid,
         seed_kind=payload["seed_kind"],
@@ -233,6 +242,7 @@ def _save_tx(tx: Any, payload: dict[str, Any]) -> None:
         created_at=payload["created_at"],
         summary=payload["summary"],
         hypotheses=payload["hypotheses"],
+        anchor_json=payload["anchor_json"],
     )
     # Replace subject-owned children atomically. Identifier nodes are NOT
     # deleted because they are shared across subjects — only the relationship
@@ -299,6 +309,7 @@ def _get_tx(tx: Any, subject_id: str) -> dict[str, Any] | None:
                sub.created_at        AS created_at,
                sub.summary_md        AS summary,
                sub.hypotheses_md     AS hypotheses,
+               sub.anchor_json       AS anchor_json,
                traces, edges
         """,
         id=subject_id,
@@ -313,6 +324,7 @@ def _get_tx(tx: Any, subject_id: str) -> dict[str, Any] | None:
         "created_at": record["created_at"],
         "summary": record["summary"],
         "hypotheses": record["hypotheses"],
+        "anchor_json": record["anchor_json"],
         "traces": [t for t in record["traces"] if t is not None],
         "edges": [e for e in record["edges"] if e is not None],
     }
@@ -333,6 +345,7 @@ def _list_recent_tx(tx: Any, limit: int) -> list[dict[str, Any]]:
                sub.created_at        AS created_at,
                sub.summary_md        AS summary_md,
                sub.hypotheses_md     AS hypotheses_md,
+               sub.anchor_json       AS anchor_json,
                trace_count,
                edge_count
         ORDER BY sub.created_at DESC, sub.id DESC
@@ -349,6 +362,7 @@ def _list_recent_tx(tx: Any, limit: int) -> list[dict[str, Any]]:
             "created_at": rec["created_at"],
             "summary_md": rec["summary_md"],
             "hypotheses_md": rec["hypotheses_md"],
+            "anchor_json": rec["anchor_json"],
             "trace_count": rec["trace_count"],
             "edge_count": rec["edge_count"],
         }

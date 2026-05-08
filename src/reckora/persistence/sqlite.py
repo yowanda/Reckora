@@ -35,6 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
 
+from ..evidence.anchor import Anchor
 from ..models.entity import Edge, Identifier, Subject, Trace
 from ..models.enums import IdentifierType
 from .repository import SavedDossier, SavedDossierSummary
@@ -62,6 +63,11 @@ CREATE TABLE IF NOT EXISTS edges(
     idx INTEGER NOT NULL,
     edge_json TEXT NOT NULL,
     PRIMARY KEY (subject_id, idx)
+);
+
+CREATE TABLE IF NOT EXISTS dossier_anchors(
+    subject_id TEXT PRIMARY KEY REFERENCES subjects(id) ON DELETE CASCADE,
+    anchor_json TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_subjects_created_at_desc
@@ -121,6 +127,7 @@ class SQLiteSubjectRepository:
         edges: list[Edge],
         summary: str | None = None,
         hypotheses: str | None = None,
+        anchor: Anchor | None = None,
         created_at: datetime | None = None,
     ) -> SavedDossierSummary:
         ts = (created_at or datetime.now(UTC)).astimezone(UTC).isoformat()
@@ -155,6 +162,16 @@ class SQLiteSubjectRepository:
                 "INSERT INTO edges (subject_id, idx, edge_json) VALUES (?, ?, ?)",
                 [(subject.id, i, e.model_dump_json()) for i, e in enumerate(edges)],
             )
+            # ``INSERT OR REPLACE`` already wiped the prior anchor row (FK
+            # cascade), but we delete explicitly to cover the
+            # save-without-anchor-after-saving-with-anchor case where the
+            # cascade does not fire.
+            conn.execute("DELETE FROM dossier_anchors WHERE subject_id = ?", (subject.id,))
+            if anchor is not None:
+                conn.execute(
+                    "INSERT INTO dossier_anchors (subject_id, anchor_json) VALUES (?, ?)",
+                    (subject.id, anchor.model_dump_json()),
+                )
         return SavedDossierSummary(
             id=subject.id,
             seed_identifier=subject.seed_identifier,
@@ -164,6 +181,7 @@ class SQLiteSubjectRepository:
             edge_count=len(edges),
             has_summary=summary is not None,
             has_hypotheses=hypotheses is not None,
+            has_anchor=anchor is not None,
         )
 
     def get(self, subject_id: str) -> SavedDossier | None:
@@ -196,6 +214,12 @@ class SQLiteSubjectRepository:
         ).fetchall()
         edges = [Edge.model_validate_json(r[0]) for r in edge_rows]
 
+        anchor_row = self._conn.execute(
+            "SELECT anchor_json FROM dossier_anchors WHERE subject_id = ?",
+            (subject_id,),
+        ).fetchone()
+        anchor = Anchor.model_validate_json(anchor_row[0]) if anchor_row is not None else None
+
         subject = Subject(
             id=subject_id,
             seed_identifier=seed,
@@ -210,6 +234,7 @@ class SQLiteSubjectRepository:
             created_at=datetime.fromisoformat(created_at),
             summary=summary,
             hypotheses=hypotheses,
+            anchor=anchor,
         )
 
     def list_recent(self, limit: int = 20) -> list[SavedDossierSummary]:
@@ -221,7 +246,8 @@ class SQLiteSubjectRepository:
                    s.identifiers_json, s.created_at,
                    s.summary_md, s.hypotheses_md,
                    (SELECT COUNT(*) FROM traces t WHERE t.subject_id = s.id),
-                   (SELECT COUNT(*) FROM edges e WHERE e.subject_id = s.id)
+                   (SELECT COUNT(*) FROM edges e WHERE e.subject_id = s.id),
+                   (SELECT COUNT(*) FROM dossier_anchors a WHERE a.subject_id = s.id)
             FROM subjects s
             ORDER BY s.created_at DESC, s.id DESC
             LIMIT ?
@@ -239,6 +265,7 @@ class SQLiteSubjectRepository:
             hypotheses_md,
             trace_count,
             edge_count,
+            anchor_count,
         ) in rows:
             seed = Identifier(type=IdentifierType(seed_kind), value=seed_value)
             ids_data = json.loads(identifiers_json)
@@ -252,6 +279,7 @@ class SQLiteSubjectRepository:
                     edge_count=int(edge_count),
                     has_summary=summary_md is not None,
                     has_hypotheses=hypotheses_md is not None,
+                    has_anchor=int(anchor_count) > 0,
                 )
             )
         return out

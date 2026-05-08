@@ -85,6 +85,7 @@ class _FakeTransaction:
                 "created_at": params["created_at"],
                 "summary_md": params["summary"],
                 "hypotheses_md": params["hypotheses"],
+                "anchor_json": params.get("anchor_json"),
             }
             self._store.subject_traces.setdefault(params["id"], [])
             self._store.subject_edges.setdefault(params["id"], [])
@@ -142,6 +143,7 @@ class _FakeTransaction:
                 created_at=row["created_at"],
                 summary=row["summary_md"],
                 hypotheses=row["hypotheses_md"],
+                anchor_json=row.get("anchor_json"),
                 traces=[t["trace_json"] for t in traces],
                 edges=[e["edge_json"] for e in edges],
             )
@@ -164,6 +166,7 @@ class _FakeTransaction:
                     created_at=row["created_at"],
                     summary_md=row["summary_md"],
                     hypotheses_md=row["hypotheses_md"],
+                    anchor_json=row.get("anchor_json"),
                     trace_count=len(self._store.subject_traces.get(sid, [])),
                     edge_count=len(self._store.subject_edges.get(sid, [])),
                 )

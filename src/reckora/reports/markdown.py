@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from ..anomaly import detect_anomalies
+from ..evidence.anchor import Anchor
 from ..models.entity import Edge, Subject, Trace
 from .timeline import build_timeline
 
@@ -16,6 +17,7 @@ def to_dossier_md(
     edges: list[Edge],
     summary: str | None = None,
     hypotheses: str | None = None,
+    anchor: Anchor | None = None,
 ) -> str:
     """Render a complete dossier as a Markdown document."""
     lines: list[str] = []
@@ -101,6 +103,21 @@ def to_dossier_md(
     if hypotheses:
         lines.append("## AI hypotheses")
         lines.append(hypotheses)
+        lines.append("")
+
+    if anchor is not None:
+        lines.append("## Cross-trace anchor")
+        lines.append(f"- merkle_root: `{anchor.merkle_root}`")
+        lines.append(f"- leaves: {len(anchor.leaf_hashes)}")
+        lines.append(f"- created: {anchor.created_at.isoformat()}")
+        if anchor.receipts:
+            lines.append("- calendars:")
+            for receipt in anchor.receipts:
+                lines.append(
+                    f"  - `{receipt.calendar_url}` (submitted {receipt.submitted_at.isoformat()})"
+                )
+        else:
+            lines.append("- calendars: _none responded — root preserved locally_")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"

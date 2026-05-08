@@ -95,6 +95,41 @@ Each `Trace.evidence.screenshot_path` then points at the captured PNG, and
 all four dossier renderers (markdown, JSON, HTML, PDF) include the path /
 link next to the live source URL.
 
+Anchor a dossier's evidence into a single tamper-evident Merkle root and
+submit that root to the public OpenTimestamps calendar fleet so a third
+party can later prove "every byte of evidence captured at investigation
+time was already present at this Bitcoin block":
+
+```bash
+reckora investigate octocat --kind username --anchor --save
+reckora verify-anchor subj-...
+```
+
+`--anchor` builds a Bitcoin-style Merkle tree over each trace's
+`Evidence.payload_sha256` (sorted leaves, even-duplication, all-SHA-256
+nodes — interchangeable with the scheme `ots stamp` uses) and submits
+the root via `POST /digest` to the same public calendars
+[`a.pool.opentimestamps.org`](https://github.com/opentimestamps/opentimestamps-server),
+`b.pool.opentimestamps.org`, and `alice.btc.calendar.opentimestamps.org`
+that the upstream `ots` CLI defaults to. The resulting `Anchor` —
+`merkle_root`, sorted `leaf_hashes`, per-calendar receipts, and
+`created_at` — is persisted alongside the dossier (SQLite +
+`dossier_anchors` table; Neo4j as a `Subject.anchor_json` property) and
+rendered into a "Cross-trace anchor" section by every dossier format
+(markdown, HTML, JSON, PDF). `reckora verify-anchor` rehashes the
+saved traces from scratch and exits non-zero if the root no longer
+matches the persisted anchor — i.e. any post-hoc tampering with the
+saved evidence flips the dossier from `VERIFY: OK` to `VERIFY: FAIL`.
+Calendar failures are best-effort: even if every public calendar is
+down, the locally-computed root is still preserved so a verifier can
+re-derive it offline. The HTTP API exposes the same toggle via the
+`anchor: true` field on `POST /api/v1/investigations`. Submission only
+covers the *stamp* half of OpenTimestamps; upgrading the receipt to a
+full Bitcoin proof once the calendar's transaction confirms is a job
+for the standalone [`ots upgrade`](https://github.com/opentimestamps/opentimestamps-client)
+CLI, since waiting on Bitcoin confirmation is hours-to-days work and
+has no place in a synchronous investigation request.
+
 Set `OPENAI_API_KEY` to enable `--ai` (LLM-generated summary + hypotheses,
 evidence-bounded with `ev:<8-hex>` citations). Alternatively, log in with
 your ChatGPT Plus / Pro account so the reasoning layer runs against your

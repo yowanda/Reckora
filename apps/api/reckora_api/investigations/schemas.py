@@ -46,6 +46,14 @@ class InvestigationRequest(BaseModel):
             "email identifiers (requires HIBP_API_KEY; off by default)."
         ),
     )
+    anchor: bool = Field(
+        default=False,
+        description=(
+            "Compute a cross-trace Merkle root and submit it to public "
+            "OpenTimestamps calendars for tamper-evident timestamping "
+            "(requires network access to the calendar fleet; off by default)."
+        ),
+    )
 
 
 class SubjectSummary(BaseModel):
@@ -66,6 +74,7 @@ class SubjectSummary(BaseModel):
     edge_count: int
     has_summary: bool
     has_hypotheses: bool
+    has_anchor: bool = False
     owner_username: str | None = None
 
 
@@ -88,4 +97,5 @@ class SavedDossierPayload(BaseModel):
     anomalies: list[dict[str, Any]]
     edges: list[dict[str, Any]]
     ai: dict[str, Any]
+    anchor: dict[str, Any] | None = None
     owner_username: str | None = None

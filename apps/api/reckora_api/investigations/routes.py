@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from reckora.collectors.base import Collector
 from reckora.collectors.breach import BreachCollector
 from reckora.config import settings as engine_settings
+from reckora.evidence.anchor import Anchor, anchor_traces
 from reckora.evidence.archive import Archiver, WaybackArchiver
 from reckora.evidence.screenshot import Screenshotter
 from reckora.models.entity import Identifier
@@ -165,12 +166,22 @@ async def create_investigation(
             edges=edges,
         )
 
+    anchor: Anchor | None = None
+    if payload.anchor:
+        if not traces:
+            raise HTTPException(
+                status_code=422,
+                detail="anchor: true requires at least one trace, but none were collected.",
+            )
+        anchor = await anchor_traces(traces)
+
     summary_row = repo.save(
         subject=subject,
         traces=traces,
         edges=edges,
         summary=summary_md,
         hypotheses=hypotheses_md,
+        anchor=anchor,
     )
     access_repo.set_owner(summary_row.id, user.id)
     payload_dict = to_dossier_dict(
@@ -179,6 +190,7 @@ async def create_investigation(
         edges=edges,
         summary=summary_md,
         hypotheses=hypotheses_md,
+        anchor=anchor,
     )
     return SavedDossierPayload(
         id=summary_row.id,
@@ -189,6 +201,7 @@ async def create_investigation(
         anomalies=payload_dict["anomalies"],
         edges=payload_dict["edges"],
         ai=payload_dict["ai"],
+        anchor=payload_dict["anchor"],
         owner_username=user.username,
     )
 
@@ -231,6 +244,7 @@ def list_subjects(
             edge_count=r.edge_count,
             has_summary=r.has_summary,
             has_hypotheses=r.has_hypotheses,
+            has_anchor=r.has_anchor,
             owner_username=_owner(r.id),
         )
         for r in rows
@@ -283,6 +297,7 @@ def get_subject(
         edges=dossier.edges,
         summary=dossier.summary,
         hypotheses=dossier.hypotheses,
+        anchor=dossier.anchor,
     )
     return SavedDossierPayload(
         id=dossier.id,
@@ -293,6 +308,7 @@ def get_subject(
         anomalies=payload_dict["anomalies"],
         edges=payload_dict["edges"],
         ai=payload_dict["ai"],
+        anchor=payload_dict["anchor"],
         owner_username=_resolve_owner_username(subject_id, access_repo, user_repo),
     )
 
@@ -326,6 +342,7 @@ def get_subject_dossier(
             edges=dossier.edges,
             summary=dossier.summary,
             hypotheses=dossier.hypotheses,
+            anchor=dossier.anchor,
         )
         return HTMLResponse(content=body)
     if fmt == "json":
@@ -336,6 +353,7 @@ def get_subject_dossier(
                 edges=dossier.edges,
                 summary=dossier.summary,
                 hypotheses=dossier.hypotheses,
+                anchor=dossier.anchor,
             )
         )
     if fmt == "pdf":
@@ -345,6 +363,7 @@ def get_subject_dossier(
             edges=dossier.edges,
             summary=dossier.summary,
             hypotheses=dossier.hypotheses,
+            anchor=dossier.anchor,
         )
         filename = f"{dossier.id}.pdf"
         return Response(
@@ -358,6 +377,7 @@ def get_subject_dossier(
         edges=dossier.edges,
         summary=dossier.summary,
         hypotheses=dossier.hypotheses,
+        anchor=dossier.anchor,
     )
     return PlainTextResponse(content=md, media_type="text/markdown; charset=utf-8")
 
