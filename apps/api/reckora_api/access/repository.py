@@ -391,6 +391,39 @@ class AccessRepository:
         self._conn.commit()
         return cur.rowcount > 0
 
+    def update_comment(
+        self,
+        comment_id: int,
+        body: str,
+        *,
+        updated_at: str,
+    ) -> CommentRow | None:
+        """Replace a comment's body and stamp ``updated_at``.
+
+        Returns the freshly-updated row, or ``None`` if no comment with
+        ``comment_id`` exists. The caller is responsible for the
+        authorisation decision (only the comment author should be able
+        to edit) and for validating the body — we do the minimum
+        ``UPDATE`` here so the repository stays a thin SQL wrapper.
+
+        We deliberately do NOT touch ``created_at``: clients render
+        edits with a "(edited)" badge by checking
+        ``updated_at is not None``, so ``created_at`` must remain
+        the original anchor.
+        """
+        cur = self._conn.execute(
+            """
+            UPDATE subject_comments
+            SET body = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (body, updated_at, comment_id),
+        )
+        self._conn.commit()
+        if cur.rowcount == 0:
+            return None
+        return self.get_comment(comment_id)
+
     # -- visibility helpers ----------------------------------------------
 
     def can_read(self, subject_id: str, user_id: int) -> bool:
