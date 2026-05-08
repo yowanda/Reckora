@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
+from ..evidence.anchor import Anchor
 from ..models.entity import Edge, Identifier, Subject, Trace
 
 
@@ -27,7 +28,10 @@ class SavedDossier:
     The ``subject`` carries the canonical identifier list; ``traces`` and
     ``edges`` are returned alongside it because consumers (the report layer,
     the AI reasoning layer) treat them as first-class arguments rather than
-    walking the subject.
+    walking the subject. ``anchor`` is the optional cross-trace Merkle +
+    OpenTimestamps commitment minted at investigation time when the caller
+    opted into anchoring (``reckora investigate --anchor`` /
+    ``anchor: true``).
     """
 
     id: str
@@ -37,6 +41,7 @@ class SavedDossier:
     created_at: datetime
     summary: str | None = None
     hypotheses: str | None = None
+    anchor: Anchor | None = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +60,7 @@ class SavedDossierSummary:
     edge_count: int
     has_summary: bool
     has_hypotheses: bool
+    has_anchor: bool = False
 
 
 @runtime_checkable
@@ -69,6 +75,7 @@ class SubjectRepository(Protocol):
         edges: list[Edge],
         summary: str | None = None,
         hypotheses: str | None = None,
+        anchor: Anchor | None = None,
         created_at: datetime | None = None,
     ) -> SavedDossierSummary:
         """Persist one investigation result and return its summary row.

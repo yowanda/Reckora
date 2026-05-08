@@ -34,6 +34,7 @@ from .collectors.wallet_sol import SolanaChainCollector
 from .collectors.web_profile import WebProfileCollector
 from .collectors.whois_rdap import WhoisRdapCollector
 from .config import settings
+from .evidence.anchor import Anchor, anchor_traces
 from .evidence.archive import Archiver, WaybackArchiver
 from .evidence.screenshot import Screenshotter
 from .models.entity import Edge, Identifier, Subject, Trace
@@ -106,6 +107,7 @@ def _render_dossier(
     edges: list[Edge],
     summary: str | None,
     hypotheses: str | None,
+    anchor: Anchor | None = None,
 ) -> str | bytes:
     """Render a dossier in one of the supported formats.
 
@@ -119,6 +121,7 @@ def _render_dossier(
             edges=edges,
             summary=summary,
             hypotheses=hypotheses,
+            anchor=anchor,
         )
     if fmt == "html":
         return to_dossier_html(
@@ -127,6 +130,7 @@ def _render_dossier(
             edges=edges,
             summary=summary,
             hypotheses=hypotheses,
+            anchor=anchor,
         )
     if fmt == "md":
         return to_dossier_md(
@@ -135,6 +139,7 @@ def _render_dossier(
             edges=edges,
             summary=summary,
             hypotheses=hypotheses,
+            anchor=anchor,
         )
     if fmt == "pdf":
         return to_dossier_pdf(
@@ -143,6 +148,7 @@ def _render_dossier(
             edges=edges,
             summary=summary,
             hypotheses=hypotheses,
+            anchor=anchor,
         )
     raise typer.BadParameter(f"unknown format {fmt!r}; expected one of: md, json, html, pdf")
 
@@ -193,7 +199,8 @@ async def _run(
     archiver: Archiver | None = None,
     screenshotter: Screenshotter | None = None,
     breach_enabled: bool = False,
-) -> tuple[Subject, list[Trace], list[Edge], str | None, str | None]:
+    anchor_enabled: bool = False,
+) -> tuple[Subject, list[Trace], list[Edge], str | None, str | None, Anchor | None]:
     orchestrator = _build_orchestrator(breach_enabled=breach_enabled)
     subject, traces, edges = await orchestrator.investigate(
         seed,
@@ -201,6 +208,14 @@ async def _run(
         archiver=archiver,
         screenshotter=screenshotter,
     )
+
+    anchor: Anchor | None = None
+    if anchor_enabled:
+        if not traces:
+            raise typer.BadParameter(
+                "--anchor requires at least one trace, but the investigation produced none."
+            )
+        anchor = await anchor_traces(traces)
 
     summary_md: str | None = None
     hypotheses_md: str | None = None
@@ -241,7 +256,7 @@ async def _run(
         finally:
             await client.aclose()
 
-    return subject, traces, edges, summary_md, hypotheses_md
+    return subject, traces, edges, summary_md, hypotheses_md, anchor
 
 
 @app.command()
@@ -327,6 +342,16 @@ def investigate(
             ),
         ),
     ] = False,
+    anchor: Annotated[
+        bool,
+        typer.Option(
+            "--anchor",
+            help=(
+                "Compute a cross-trace Merkle root and submit it to public "
+                "OpenTimestamps calendars for tamper-evident timestamping."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Run a Reckora investigation against a seed Identifier."""
     seed = _identifier_from(value, kind)
@@ -342,7 +367,9 @@ def investigate(
         _build_screenshotter(screenshots_dir) if screenshot else None
     )
 
-    async def _go() -> tuple[Subject, list[Trace], list[Edge], str | None, str | None]:
+    async def _go() -> tuple[
+        Subject, list[Trace], list[Edge], str | None, str | None, Anchor | None
+    ]:
         try:
             return await _run(
                 seed,
@@ -351,6 +378,7 @@ def investigate(
                 archiver=archiver,
                 screenshotter=screenshotter,
                 breach_enabled=breach,
+                anchor_enabled=anchor,
             )
         finally:
             for resource in (archiver, screenshotter):
@@ -358,7 +386,7 @@ def investigate(
                 if close is not None:
                     await close()
 
-    subject, traces, edges, summary_md, hypotheses_md = asyncio.run(_go())
+    subject, traces, edges, summary_md, hypotheses_md, anchor_record = asyncio.run(_go())
 
     if save:
         with SQLiteSubjectRepository(db or settings.db_path) as repo:
@@ -368,6 +396,7 @@ def investigate(
                 edges=edges,
                 summary=summary_md,
                 hypotheses=hypotheses_md,
+                anchor=anchor_record,
             )
         typer.echo(f"saved {subject.id}", err=True)
 
@@ -378,6 +407,7 @@ def investigate(
         edges=edges,
         summary=summary_md,
         hypotheses=hypotheses_md,
+        anchor=anchor_record,
     )
     _emit(payload, output=output)
 
@@ -446,8 +476,63 @@ def show(
         edges=dossier.edges,
         summary=dossier.summary,
         hypotheses=dossier.hypotheses,
+        anchor=dossier.anchor,
     )
     _emit(payload, output=output)
+
+
+@app.command(name="verify-anchor")
+def verify_anchor(
+    subject_id: Annotated[str, typer.Argument(help="Subject id (e.g. subj-abcdef123456).")],
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="SQLite database path."),
+    ] = None,
+) -> None:
+    """Verify a saved dossier's cross-trace Merkle anchor.
+
+    Recomputes the Merkle root from the dossier's persisted traces and
+    compares it against the root recorded in the anchor at investigation
+    time. A mismatch means the dossier's evidence (or the persisted
+    anchor) has been tampered with since anchoring; a match plus the
+    OpenTimestamps calendar receipts is the cryptographic basis for
+    saying "these traces existed in this exact form on or before
+    ``anchor.created_at``".
+    """
+    from .evidence.merkle import compute_dossier_root
+
+    with SQLiteSubjectRepository(db or settings.db_path) as repo:
+        dossier = repo.get(subject_id)
+    if dossier is None:
+        raise typer.BadParameter(f"no saved dossier with id {subject_id!r}")
+    if dossier.anchor is None:
+        typer.echo(
+            f"{subject_id} has no anchor — re-run investigate with --anchor.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    recomputed_root, recomputed_leaves = compute_dossier_root(dossier.traces)
+    anchor = dossier.anchor
+
+    typer.echo(f"subject:        {subject_id}")
+    typer.echo(f"anchored:       {anchor.created_at.isoformat()}")
+    typer.echo(f"recorded root:  {anchor.merkle_root}")
+    typer.echo(f"recomputed:     {recomputed_root}")
+    typer.echo(f"leaves:         {len(recomputed_leaves)} (recorded {len(anchor.leaf_hashes)})")
+    if anchor.receipts:
+        typer.echo("calendars:")
+        for receipt in anchor.receipts:
+            typer.echo(
+                f"  - {receipt.calendar_url}  (submitted {receipt.submitted_at.isoformat()})"
+            )
+    else:
+        typer.echo("calendars:      (none responded — root preserved locally)")
+
+    if anchor.merkle_root != recomputed_root or sorted(anchor.leaf_hashes) != recomputed_leaves:
+        typer.echo("\nVERIFY: FAIL — recomputed root does not match the anchor.", err=True)
+        raise typer.Exit(code=2)
+    typer.echo("\nVERIFY: OK — recomputed root matches the anchor.")
 
 
 @app.command()

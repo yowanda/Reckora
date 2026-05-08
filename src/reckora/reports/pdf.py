@@ -26,6 +26,7 @@ from reportlab.platypus import (
 )
 
 from ..anomaly import Anomaly, AnomalySeverity, detect_anomalies
+from ..evidence.anchor import Anchor
 from ..models.entity import Edge, Subject, Trace
 from .timeline import TimelineEntry, build_timeline
 
@@ -358,6 +359,7 @@ def to_dossier_pdf(
     edges: list[Edge],
     summary: str | None = None,
     hypotheses: str | None = None,
+    anchor: Anchor | None = None,
 ) -> bytes:
     """Render a complete dossier as a PDF document and return raw bytes."""
     styles = _styles()
@@ -424,6 +426,26 @@ def to_dossier_pdf(
     if hypotheses:
         story.append(Paragraph("AI hypotheses", styles["h2"]))
         story.append(Paragraph(_esc(hypotheses).replace("\n", "<br/>"), styles["body"]))
+
+    if anchor is not None:
+        story.append(Paragraph("Cross-trace anchor", styles["h2"]))
+        anchor_rows: list[tuple[str, str]] = [
+            ("merkle root", f"<font face='Courier'>{_esc(anchor.merkle_root)}</font>"),
+            ("leaves", str(len(anchor.leaf_hashes))),
+            ("created", _esc(anchor.created_at.isoformat())),
+        ]
+        if anchor.receipts:
+            calendars = "<br/>".join(
+                f"<font face='Courier'>{_esc(r.calendar_url)}</font> "
+                f"(submitted {_esc(r.submitted_at.isoformat())})"
+                for r in anchor.receipts
+            )
+            anchor_rows.append(("calendars", calendars))
+        else:
+            anchor_rows.append(
+                ("calendars", "<i>none responded — root preserved locally</i>"),
+            )
+        story.append(_kv_table(anchor_rows, styles))
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(

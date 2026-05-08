@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 import jinja2
 
 from ..anomaly import AnomalySeverity, detect_anomalies
+from ..evidence.anchor import Anchor
 from ..models.entity import Edge, Subject, Trace
 from .timeline import build_timeline
 
@@ -204,6 +205,32 @@ ul.anomalies .refs { font-size: .8rem; color: #666; margin-top: .25rem; }
 <h2>AI hypotheses</h2>
 <div class="card ai">{{ hypotheses }}</div>
 {% endif %}
+
+{% if anchor %}
+<h2>Cross-trace anchor</h2>
+<div class="card">
+  <dl class="kv">
+    <dt>merkle root</dt>
+    <dd><code>{{ anchor.merkle_root }}</code></dd>
+    <dt>leaves</dt>
+    <dd>{{ anchor.leaf_hashes|length }}</dd>
+    <dt>created</dt>
+    <dd>{{ anchor.created_at.isoformat() }}</dd>
+    <dt>calendars</dt>
+    <dd>
+      {% if anchor.receipts %}
+      <ul>
+        {% for r in anchor.receipts %}
+        <li><code>{{ r.calendar_url }}</code> · submitted {{ r.submitted_at.isoformat() }}</li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <em>none responded — root preserved locally</em>
+      {% endif %}
+    </dd>
+  </dl>
+</div>
+{% endif %}
 </body>
 </html>
 """
@@ -237,6 +264,7 @@ def to_dossier_html(
     edges: list[Edge],
     summary: str | None = None,
     hypotheses: str | None = None,
+    anchor: Anchor | None = None,
 ) -> str:
     """Render a complete dossier as a self-contained HTML document."""
     env = jinja2.Environment(
@@ -260,4 +288,5 @@ def to_dossier_html(
         edges=edges,
         summary=summary,
         hypotheses=hypotheses,
+        anchor=anchor,
     )

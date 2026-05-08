@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from ..anomaly import detect_anomalies
+from ..evidence.anchor import Anchor
 from ..models.entity import Edge, Subject, Trace
 from .timeline import build_timeline
 
@@ -17,6 +18,7 @@ def to_dossier_dict(
     edges: list[Edge],
     summary: str | None = None,
     hypotheses: str | None = None,
+    anchor: Anchor | None = None,
 ) -> dict[str, Any]:
     """Render a complete dossier as a plain Python dict."""
     return {
@@ -29,6 +31,7 @@ def to_dossier_dict(
             "summary": summary,
             "hypotheses": hypotheses,
         },
+        "anchor": anchor.model_dump(mode="json") if anchor is not None else None,
     }
 
 
@@ -39,6 +42,7 @@ def to_dossier_json(
     edges: list[Edge],
     summary: str | None = None,
     hypotheses: str | None = None,
+    anchor: Anchor | None = None,
 ) -> str:
     """Render a complete dossier as a pretty JSON string."""
     return json.dumps(
@@ -48,6 +52,7 @@ def to_dossier_json(
             edges=edges,
             summary=summary,
             hypotheses=hypotheses,
+            anchor=anchor,
         ),
         indent=2,
         sort_keys=True,
