@@ -30,6 +30,10 @@ class Settings(BaseSettings):
         default="Reckora/0.1",
         validation_alias="RECKORA_USER_AGENT",
     )
+    db_path: str = Field(
+        default="reckora.db",
+        validation_alias="RECKORA_DB_PATH",
+    )
 
 
 settings = Settings()

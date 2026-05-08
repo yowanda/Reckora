@@ -16,6 +16,7 @@ from .config import settings
 from .models.entity import Edge, Identifier, Subject, Trace
 from .models.enums import IdentifierType
 from .orchestrator import Orchestrator
+from .persistence import SQLiteSubjectRepository
 from .reasoning.client import ReasoningClient
 from .reasoning.hypothesize import hypothesize
 from .reasoning.summarize import summarize
@@ -115,6 +116,20 @@ def investigate(
             help="Extra identifier in 'kind:value' form (repeatable).",
         ),
     ] = None,
+    save: Annotated[
+        bool,
+        typer.Option(
+            "--save",
+            help="Persist this dossier to the SQLite store so it can be reopened later.",
+        ),
+    ] = False,
+    db: Annotated[
+        Path | None,
+        typer.Option(
+            "--db",
+            help="SQLite database path (defaults to RECKORA_DB_PATH or ./reckora.db).",
+        ),
+    ] = None,
 ) -> None:
     """Run a Reckora investigation against a seed Identifier."""
     seed = _identifier_from(value, kind)
@@ -126,6 +141,17 @@ def investigate(
         extras.append(_identifier_from(v, k))
 
     subject, traces, edges, summary_md, hypotheses_md = asyncio.run(_run(seed, extras, ai))
+
+    if save:
+        with SQLiteSubjectRepository(db or settings.db_path) as repo:
+            repo.save(
+                subject=subject,
+                traces=traces,
+                edges=edges,
+                summary=summary_md,
+                hypotheses=hypotheses_md,
+            )
+        typer.echo(f"saved {subject.id}", err=True)
 
     if output is not None:
         if output.suffix.lower() == ".json":
@@ -168,6 +194,90 @@ def investigate(
                 hypotheses=hypotheses_md,
             )
         )
+
+
+@app.command(name="list")
+def list_dossiers(
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-n", help="Maximum number of dossiers to list."),
+    ] = 20,
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="SQLite database path."),
+    ] = None,
+) -> None:
+    """List recently saved dossiers, newest first."""
+    with SQLiteSubjectRepository(db or settings.db_path) as repo:
+        rows = repo.list_recent(limit=limit)
+    if not rows:
+        typer.echo("(no saved dossiers)")
+        return
+    for r in rows:
+        flags = []
+        if r.has_summary:
+            flags.append("summary")
+        if r.has_hypotheses:
+            flags.append("hypotheses")
+        flag_str = f" [{','.join(flags)}]" if flags else ""
+        typer.echo(
+            f"{r.id}\t{r.created_at.isoformat()}\t"
+            f"{r.seed_identifier.type.value}:{r.seed_identifier.value}\t"
+            f"traces={r.trace_count} edges={r.edge_count}{flag_str}"
+        )
+
+
+@app.command()
+def show(
+    subject_id: Annotated[str, typer.Argument(help="Subject id (e.g. subj-abcdef123456).")],
+    fmt: Annotated[str, typer.Option("--format", "-f", help="Output format: md|json.")] = "md",
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="SQLite database path."),
+    ] = None,
+) -> None:
+    """Render a previously-saved dossier from the SQLite store."""
+    with SQLiteSubjectRepository(db or settings.db_path) as repo:
+        dossier = repo.get(subject_id)
+    if dossier is None:
+        raise typer.BadParameter(f"no saved dossier with id {subject_id!r}")
+
+    if fmt == "json":
+        typer.echo(
+            to_dossier_json(
+                subject=dossier.subject,
+                traces=dossier.traces,
+                edges=dossier.edges,
+                summary=dossier.summary,
+                hypotheses=dossier.hypotheses,
+            )
+        )
+    else:
+        typer.echo(
+            to_dossier_md(
+                subject=dossier.subject,
+                traces=dossier.traces,
+                edges=dossier.edges,
+                summary=dossier.summary,
+                hypotheses=dossier.hypotheses,
+            )
+        )
+
+
+@app.command()
+def delete(
+    subject_id: Annotated[str, typer.Argument(help="Subject id to delete.")],
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="SQLite database path."),
+    ] = None,
+) -> None:
+    """Delete a saved dossier from the SQLite store."""
+    with SQLiteSubjectRepository(db or settings.db_path) as repo:
+        removed = repo.delete(subject_id)
+    if not removed:
+        raise typer.BadParameter(f"no saved dossier with id {subject_id!r}")
+    typer.echo(f"deleted {subject_id}")
 
 
 @app.command()
