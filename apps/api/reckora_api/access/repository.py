@@ -1,10 +1,14 @@
-"""SQLite-backed subject ownership + sharing store.
+"""SQLite-backed subject ownership / sharing / collaboration store.
 
 The access tables live in the same database file as the engine's
 ``subjects`` table and the API's ``users`` table, which lets us declare
 proper ``ON DELETE CASCADE`` foreign keys: deleting a subject (even via
-the engine-side CLI) automatically cleans up its owner row and any
-shares, and deactivating / hard-deleting a user wipes their shares.
+the engine-side CLI) automatically cleans up its owner row, any shares,
+any comments, and any assignment rows; deactivating / hard-deleting a
+user wipes their shares, their authored comments, and their assignment
+rows, while preserving the ``assigned_by`` audit trail on rows the
+deleted user *granted* (those collapse to ``NULL`` rather than
+vanishing).
 
 Decoupling from the engine schema
 ---------------------------------
@@ -14,13 +18,15 @@ The engine's :class:`~reckora.persistence.repository.SubjectRepository`
 doesn't know about users — it can save and load dossiers regardless of
 whether the API is ever started. Putting ownership in side tables means
 the engine schema stays user-agnostic and the API can evolve its
-authorisation model without forcing engine migrations.
+authorisation model (sharing, assignment, comments, …) without forcing
+engine migrations.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from types import TracebackType
@@ -53,11 +59,64 @@ CREATE TABLE IF NOT EXISTS subject_shares(
 
 CREATE INDEX IF NOT EXISTS idx_subject_shares_user
     ON subject_shares(user_id);
+
+CREATE TABLE IF NOT EXISTS subject_comments(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_id TEXT NOT NULL
+        REFERENCES subjects(id) ON DELETE CASCADE,
+    author_user_id INTEGER NOT NULL
+        REFERENCES users(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_subject_comments_subject
+    ON subject_comments(subject_id, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_subject_comments_author
+    ON subject_comments(author_user_id);
+
+CREATE TABLE IF NOT EXISTS subject_assignees(
+    subject_id TEXT NOT NULL
+        REFERENCES subjects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL
+        REFERENCES users(id) ON DELETE CASCADE,
+    assigned_by INTEGER
+        REFERENCES users(id) ON DELETE SET NULL,
+    assigned_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_subject_assignees_user
+    ON subject_assignees(user_id);
 """
 
 
+@dataclass(frozen=True, slots=True)
+class CommentRow:
+    """One row in :meth:`AccessRepository.list_comments` / :meth:`get_comment`."""
+
+    id: int
+    subject_id: str
+    author_user_id: int
+    body: str
+    created_at: str
+    updated_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class AssigneeRow:
+    """One row in :meth:`AccessRepository.list_assignees`."""
+
+    subject_id: str
+    user_id: int
+    assigned_by: int | None
+    assigned_at: str
+
+
 class AccessRepository:
-    """Owner + share tracking for saved dossiers.
+    """Owner / share / assignment / comment book-keeping for saved dossiers.
 
     All public methods are pure book-keeping: they do not synthesise a
     subject or otherwise duplicate engine state. Callers are expected to
@@ -71,7 +130,8 @@ class AccessRepository:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         # Foreign keys are off by default in SQLite — we rely on cascades to
-        # keep owner / share rows tidy when a subject or user is deleted.
+        # keep owner / share / comment / assignment rows tidy when a
+        # subject or user is deleted.
         self._conn.execute("PRAGMA foreign_keys = ON;")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
@@ -159,10 +219,189 @@ class AccessRepository:
         ).fetchall()
         return [(int(uid), str(ts)) for uid, ts in rows]
 
+    # -- assignment -------------------------------------------------------
+
+    def add_assignee(
+        self,
+        subject_id: str,
+        user_id: int,
+        *,
+        assigned_by: int | None,
+        assigned_at: str,
+    ) -> bool:
+        """Assign ``user_id`` to ``subject_id`` (idempotent).
+
+        Returns ``True`` when a new row was inserted, ``False`` if the
+        user was already assigned. Assignment is independent of sharing
+        — see :meth:`can_read`, which treats both as read-grants.
+
+        ``assigned_by`` may be ``None`` so callers can record
+        system-driven assignments (e.g. an automated triage worker)
+        that don't map to a single human. The column is also nullable
+        on disk so that deleting the granting user doesn't cascade-erase
+        the assignment itself.
+        """
+        cur = self._conn.execute(
+            """
+            INSERT OR IGNORE INTO subject_assignees(
+                subject_id, user_id, assigned_by, assigned_at
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (subject_id, user_id, assigned_by, assigned_at),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def remove_assignee(self, subject_id: str, user_id: int) -> bool:
+        """Unassign a user. Returns ``True`` if a row was removed."""
+        cur = self._conn.execute(
+            "DELETE FROM subject_assignees WHERE subject_id = ? AND user_id = ?",
+            (subject_id, user_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def list_assignees(self, subject_id: str) -> list[AssigneeRow]:
+        """Return every assignment row for ``subject_id``, oldest first."""
+        rows = self._conn.execute(
+            """
+            SELECT subject_id, user_id, assigned_by, assigned_at
+            FROM subject_assignees
+            WHERE subject_id = ?
+            ORDER BY assigned_at ASC, user_id ASC
+            """,
+            (subject_id,),
+        ).fetchall()
+        return [
+            AssigneeRow(
+                subject_id=str(sid),
+                user_id=int(uid),
+                assigned_by=None if granted_by is None else int(granted_by),
+                assigned_at=str(ts),
+            )
+            for sid, uid, granted_by, ts in rows
+        ]
+
+    def is_assigned(self, subject_id: str, user_id: int) -> bool:
+        """Cheap existence probe used by :meth:`can_read`."""
+        row = self._conn.execute(
+            """
+            SELECT 1 FROM subject_assignees
+            WHERE subject_id = ? AND user_id = ?
+            """,
+            (subject_id, user_id),
+        ).fetchone()
+        return row is not None
+
+    # -- comments ---------------------------------------------------------
+
+    def add_comment(
+        self,
+        subject_id: str,
+        author_user_id: int,
+        body: str,
+        *,
+        created_at: str,
+    ) -> CommentRow:
+        """Append a comment thread entry. Returns the persisted row.
+
+        We materialise the row right after the insert (rather than
+        round-tripping ``cur.lastrowid`` only) so the API can hand the
+        full :class:`CommentRow` back to the caller without a separate
+        SELECT — keeping the create endpoint a single transaction.
+        """
+        cur = self._conn.execute(
+            """
+            INSERT INTO subject_comments(
+                subject_id, author_user_id, body, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, NULL)
+            """,
+            (subject_id, author_user_id, body, created_at),
+        )
+        self._conn.commit()
+        comment_id = cur.lastrowid
+        if comment_id is None:  # pragma: no cover - sqlite3 contract
+            raise RuntimeError("INSERT did not yield a lastrowid")
+        return CommentRow(
+            id=int(comment_id),
+            subject_id=subject_id,
+            author_user_id=author_user_id,
+            body=body,
+            created_at=created_at,
+            updated_at=None,
+        )
+
+    def get_comment(self, comment_id: int) -> CommentRow | None:
+        """Look up a single comment, used for delete-time authorisation."""
+        row = self._conn.execute(
+            """
+            SELECT id, subject_id, author_user_id, body, created_at, updated_at
+            FROM subject_comments
+            WHERE id = ?
+            """,
+            (comment_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        cid, sid, author_id, body, created_at, updated_at = row
+        return CommentRow(
+            id=int(cid),
+            subject_id=str(sid),
+            author_user_id=int(author_id),
+            body=str(body),
+            created_at=str(created_at),
+            updated_at=None if updated_at is None else str(updated_at),
+        )
+
+    def list_comments(self, subject_id: str) -> list[CommentRow]:
+        """Return every comment on ``subject_id``, oldest first.
+
+        ``id`` is a deterministic tiebreaker so two comments inserted in
+        the same millisecond still come back in insertion order.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT id, subject_id, author_user_id, body, created_at, updated_at
+            FROM subject_comments
+            WHERE subject_id = ?
+            ORDER BY datetime(created_at) ASC, id ASC
+            """,
+            (subject_id,),
+        ).fetchall()
+        return [
+            CommentRow(
+                id=int(cid),
+                subject_id=str(sid),
+                author_user_id=int(author_id),
+                body=str(body),
+                created_at=str(created_at),
+                updated_at=None if updated_at is None else str(updated_at),
+            )
+            for cid, sid, author_id, body, created_at, updated_at in rows
+        ]
+
+    def delete_comment(self, comment_id: int) -> bool:
+        """Remove a comment. Returns ``True`` if a row was deleted."""
+        cur = self._conn.execute(
+            "DELETE FROM subject_comments WHERE id = ?",
+            (comment_id,),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
     # -- visibility helpers ----------------------------------------------
 
     def can_read(self, subject_id: str, user_id: int) -> bool:
-        """``True`` if ``user_id`` is the owner or has an explicit share."""
+        """``True`` if ``user_id`` is the owner, has a share, or is assigned.
+
+        Assignment grants implicit read access — there is no scenario
+        where a user should be tasked with working on a dossier but
+        unable to open it. Callers that need to distinguish *why* a
+        user can read should compose ``get_owner`` / ``list_shares`` /
+        ``list_assignees`` themselves.
+        """
         row = self._conn.execute(
             """
             SELECT 1 WHERE EXISTS(
@@ -170,6 +409,9 @@ class AccessRepository:
                 WHERE subject_id = :sid AND owner_user_id = :uid
             ) OR EXISTS(
                 SELECT 1 FROM subject_shares
+                WHERE subject_id = :sid AND user_id = :uid
+            ) OR EXISTS(
+                SELECT 1 FROM subject_assignees
                 WHERE subject_id = :sid AND user_id = :uid
             )
             """,
@@ -183,7 +425,7 @@ class AccessRepository:
         *,
         limit: int = 20,
     ) -> list[SavedDossierSummary]:
-        """Most-recent dossiers visible to ``user_id`` (owned + shared).
+        """Most-recent dossiers visible to ``user_id`` (owned, shared, or assigned).
 
         We hand-roll the query against the engine's ``subjects`` table
         rather than going through :meth:`SubjectRepository.list_recent`
@@ -221,9 +463,11 @@ class AccessRepository:
                 ) AS anchor_count
             FROM subjects s
             WHERE s.id IN (
-                SELECT subject_id FROM subject_owners WHERE owner_user_id = :uid
+                SELECT subject_id FROM subject_owners    WHERE owner_user_id = :uid
                 UNION
-                SELECT subject_id FROM subject_shares  WHERE user_id       = :uid
+                SELECT subject_id FROM subject_shares    WHERE user_id       = :uid
+                UNION
+                SELECT subject_id FROM subject_assignees WHERE user_id       = :uid
             )
             ORDER BY datetime(s.created_at) DESC, s.id DESC
             LIMIT :limit
