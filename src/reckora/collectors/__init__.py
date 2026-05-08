@@ -10,6 +10,7 @@ from .avatar import AvatarCollector
 from .base import Collector
 from .github_api import GitHubCollector
 from .hackernews import HackerNewsCollector
+from .keybase import KeybaseCollector
 from .phone import PhoneCollector
 from .wallet_btc import BitcoinChainCollector
 from .wallet_eth import EthereumChainCollector
@@ -24,6 +25,7 @@ __all__ = [
     "EthereumChainCollector",
     "GitHubCollector",
     "HackerNewsCollector",
+    "KeybaseCollector",
     "PhoneCollector",
     "SolanaChainCollector",
     "WebProfileCollector",

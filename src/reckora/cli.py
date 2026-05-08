@@ -23,6 +23,7 @@ from .collectors.avatar import AvatarCollector
 from .collectors.breach import BreachCollector
 from .collectors.github_api import GitHubCollector
 from .collectors.hackernews import HackerNewsCollector
+from .collectors.keybase import KeybaseCollector
 from .collectors.phone import PhoneCollector
 from .collectors.wallet_btc import BitcoinChainCollector
 from .collectors.wallet_eth import EthereumChainCollector
@@ -74,6 +75,7 @@ def _build_orchestrator(*, breach_enabled: bool = False) -> Orchestrator:
     collectors: list[object] = [
         GitHubCollector(token=settings.github_token),
         HackerNewsCollector(),
+        KeybaseCollector(),
         WhoisRdapCollector(),
         WebProfileCollector(),
         PhoneCollector(),
