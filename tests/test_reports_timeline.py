@@ -88,7 +88,7 @@ def test_timeline_entry_is_frozen() -> None:
     fixed = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
     [entry] = build_timeline([_trace("alice", fetched_at=fixed)])
     try:
-        entry.identifier_value = "mallory"  # type: ignore[misc]
+        entry.identifier_value = "mallory"
     except Exception:
         return
     raise AssertionError("TimelineEntry must be frozen")
