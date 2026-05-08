@@ -57,6 +57,11 @@ dev = [
 screenshots = [
     "playwright>=1.45",
 ]
+# Optional Neo4j adapter for SubjectRepository. Pull the official driver
+# with `uv sync --extra neo4j`; default install stays slim and SQLite-only.
+neo4j = [
+    "neo4j>=5.0",
+]
 
 [project.scripts]
 reckora = "reckora.cli:app"
