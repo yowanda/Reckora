@@ -23,6 +23,7 @@ from .collectors.avatar import AvatarCollector
 from .collectors.breach import BreachCollector
 from .collectors.email import EmailCollector
 from .collectors.github_api import GitHubCollector
+from .collectors.gravatar import GravatarCollector
 from .collectors.hackernews import HackerNewsCollector
 from .collectors.keybase import KeybaseCollector
 from .collectors.phone import PhoneCollector
@@ -78,6 +79,7 @@ def _build_orchestrator(*, breach_enabled: bool = False) -> Orchestrator:
         GitHubCollector(token=settings.github_token),
         HackerNewsCollector(),
         KeybaseCollector(),
+        GravatarCollector(),
         RedditCollector(),
         WhoisRdapCollector(),
         WebProfileCollector(),
