@@ -15,6 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from reckora.collectors.github_api import GitHubCollector
+from reckora.collectors.phone import PhoneCollector
+from reckora.collectors.wallet_btc import BitcoinChainCollector
 from reckora.collectors.web_profile import WebProfileCollector
 from reckora.collectors.whois_rdap import WhoisRdapCollector
 from reckora.config import settings as engine_settings
@@ -32,6 +34,8 @@ def _default_orchestrator_factory() -> Orchestrator:
             GitHubCollector(token=engine_settings.github_token),
             WhoisRdapCollector(),
             WebProfileCollector(),
+            PhoneCollector(),
+            BitcoinChainCollector(),
         ]
     )
 
