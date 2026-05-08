@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from types import TracebackType
@@ -29,7 +30,30 @@ from reckora.models.entity import Identifier
 from reckora.models.enums import IdentifierType
 from reckora.persistence.repository import SavedDossierSummary
 
-_VisibleRow = tuple[str, str, str, str, str, str | None, str | None, int, int, int]
+_VisibleRow = tuple[str, str, str, str, str, str | None, str | None, int, int]
+# (identifier_type, identifier_value,
+#  matched_subject_id, matched_seed_kind, matched_seed_value, matched_created_at)
+_CrossRefRow = tuple[str, str, str, str, str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class CrossReferenceRow:
+    """One ``(shared identifier, matched subject)`` pair.
+
+    A single source dossier produces at most one row per
+    ``(matched_subject_id, identifier_type, identifier_value)`` triple.
+    Two dossiers that overlap on N identifiers emit N rows; callers
+    group by ``(identifier_type, identifier_value)`` to render the
+    "this identifier appears in M other dossiers" view.
+    """
+
+    identifier_type: str
+    identifier_value: str
+    matched_subject_id: str
+    matched_seed_kind: str
+    matched_seed_value: str
+    matched_created_at: str
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS subject_owners(
@@ -177,6 +201,107 @@ class AccessRepository:
         ).fetchone()
         return row is not None
 
+    def list_cross_references(
+        self,
+        source_subject_id: str,
+        *,
+        user_id: int,
+        is_admin: bool,
+    ) -> list[CrossReferenceRow]:
+        """List ``(shared identifier, matched subject)`` rows for ``source_subject_id``.
+
+        For each identifier on the source dossier, return every *other*
+        subject that lists the same identifier *and* is visible to the
+        actor:
+
+        - **Admins** see every match (including legacy un-owned dossiers
+          created by the CLI).
+        - **Viewers** see matches they own or have explicitly been
+          shared.
+
+        Rows are ordered by identifier (type then value, deterministic
+        across calls), then by ``created_at DESC, id DESC`` within each
+        identifier group, so the API can stream them straight into a
+        grouped response without an in-memory re-sort.
+
+        We materialise this against the engine's
+        :class:`reckora.persistence.sqlite.SQLiteSubjectRepository`'s
+        ``subject_identifiers`` index (added in Phase 5) — without that
+        denormalised table the query would have to JSON-scan every
+        ``identifiers_json`` blob.
+        """
+        if is_admin:
+            rows: list[_CrossRefRow] = self._conn.execute(
+                """
+                SELECT
+                    si_other.identifier_type,
+                    si_other.identifier_value,
+                    other.id,
+                    other.seed_kind,
+                    other.seed_value,
+                    other.created_at
+                FROM subject_identifiers si_source
+                JOIN subject_identifiers si_other
+                    ON  si_other.identifier_type  = si_source.identifier_type
+                    AND si_other.identifier_value = si_source.identifier_value
+                    AND si_other.subject_id      != si_source.subject_id
+                JOIN subjects other ON other.id = si_other.subject_id
+                WHERE si_source.subject_id = :source
+                ORDER BY
+                    si_other.identifier_type ASC,
+                    si_other.identifier_value ASC,
+                    datetime(other.created_at) DESC,
+                    other.id DESC
+                """,
+                {"source": source_subject_id},
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                SELECT
+                    si_other.identifier_type,
+                    si_other.identifier_value,
+                    other.id,
+                    other.seed_kind,
+                    other.seed_value,
+                    other.created_at
+                FROM subject_identifiers si_source
+                JOIN subject_identifiers si_other
+                    ON  si_other.identifier_type  = si_source.identifier_type
+                    AND si_other.identifier_value = si_source.identifier_value
+                    AND si_other.subject_id      != si_source.subject_id
+                JOIN subjects other ON other.id = si_other.subject_id
+                WHERE si_source.subject_id = :source
+                  AND (
+                      EXISTS (
+                          SELECT 1 FROM subject_owners o
+                          WHERE o.subject_id = other.id AND o.owner_user_id = :uid
+                      )
+                      OR EXISTS (
+                          SELECT 1 FROM subject_shares sh
+                          WHERE sh.subject_id = other.id AND sh.user_id = :uid
+                      )
+                  )
+                ORDER BY
+                    si_other.identifier_type ASC,
+                    si_other.identifier_value ASC,
+                    datetime(other.created_at) DESC,
+                    other.id DESC
+                """,
+                {"source": source_subject_id, "uid": user_id},
+            ).fetchall()
+        return [
+            CrossReferenceRow(
+                identifier_type=str(itype),
+                identifier_value=str(ivalue),
+                matched_subject_id=str(sid),
+                matched_seed_kind=str(seed_kind),
+                matched_seed_value=str(seed_value),
+                matched_created_at=str(created_at),
+            )
+            for itype, ivalue, sid, seed_kind, seed_value, created_at in rows
+        ]
+
     def list_visible_summaries(
         self,
         user_id: int,
@@ -214,11 +339,7 @@ class AccessRepository:
                 ) AS trace_count,
                 COALESCE(
                     (SELECT COUNT(*) FROM edges e WHERE e.subject_id = s.id), 0
-                ) AS edge_count,
-                COALESCE(
-                    (SELECT COUNT(*) FROM dossier_anchors a WHERE a.subject_id = s.id),
-                    0
-                ) AS anchor_count
+                ) AS edge_count
             FROM subjects s
             WHERE s.id IN (
                 SELECT subject_id FROM subject_owners WHERE owner_user_id = :uid
@@ -234,18 +355,7 @@ class AccessRepository:
 
 
 def _row_to_summary(row: _VisibleRow) -> SavedDossierSummary:
-    (
-        sid,
-        seed_kind,
-        seed_value,
-        identifiers_json,
-        created_at,
-        summary_md,
-        hypotheses_md,
-        t,
-        e,
-        a,
-    ) = row
+    sid, seed_kind, seed_value, identifiers_json, created_at, summary_md, hypotheses_md, t, e = row
     seed = Identifier(type=IdentifierType(seed_kind), value=seed_value)
     ids_data = json.loads(identifiers_json)
     return SavedDossierSummary(
@@ -257,5 +367,4 @@ def _row_to_summary(row: _VisibleRow) -> SavedDossierSummary:
         edge_count=int(e),
         has_summary=summary_md is not None,
         has_hypotheses=hypotheses_md is not None,
-        has_anchor=int(a) > 0,
     )

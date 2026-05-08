@@ -213,6 +213,30 @@ class Neo4jSubjectRepository:
             removed: bool = s.execute_write(_delete_tx, subject_id)
         return removed
 
+    def list_subjects_with_identifier(
+        self,
+        identifier: Identifier,
+        *,
+        exclude_subject_id: str | None = None,
+    ) -> list[str]:
+        """Cypher-side cross-reference query.
+
+        Identifier nodes are deduplicated by ``(kind, value)`` (see the
+        ``identifier_unique`` constraint in :meth:`_ensure_constraints`),
+        so the lookup is the natural Cypher join the doc-comment in
+        :mod:`reckora.persistence.neo4j_repo` already promised.
+        """
+        with self._session() as s:
+            ids: list[str] = s.execute_read(
+                _list_with_identifier_tx,
+                {
+                    "kind": identifier.type.value,
+                    "value": identifier.value,
+                    "exclude": exclude_subject_id,
+                },
+            )
+        return ids
+
 
 # ---------------------------------------------------------------------------
 # Transaction functions. Defined at module scope (rather than as methods) so
@@ -368,6 +392,33 @@ def _list_recent_tx(tx: Any, limit: int) -> list[dict[str, Any]]:
         }
         for rec in result
     ]
+
+
+def _list_with_identifier_tx(tx: Any, params: dict[str, Any]) -> list[str]:
+    """Return subject ids that share an Identifier, newest first."""
+    if params["exclude"] is None:
+        result = tx.run(
+            """
+            MATCH (i:Identifier {kind: $kind, value: $value})<-[:HAS_IDENTIFIER]-(sub:Subject)
+            RETURN sub.id AS id, sub.created_at AS created_at
+            ORDER BY sub.created_at DESC, sub.id DESC
+            """,
+            kind=params["kind"],
+            value=params["value"],
+        )
+    else:
+        result = tx.run(
+            """
+            MATCH (i:Identifier {kind: $kind, value: $value})<-[:HAS_IDENTIFIER]-(sub:Subject)
+            WHERE sub.id <> $exclude
+            RETURN sub.id AS id, sub.created_at AS created_at
+            ORDER BY sub.created_at DESC, sub.id DESC
+            """,
+            kind=params["kind"],
+            value=params["value"],
+            exclude=params["exclude"],
+        )
+    return [str(rec["id"]) for rec in result]
 
 
 def _delete_tx(tx: Any, subject_id: str) -> bool:
