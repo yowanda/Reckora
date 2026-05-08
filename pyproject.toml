@@ -51,6 +51,12 @@ dev = [
     "types-pillow>=10.0",
     "types-networkx>=3.2",
 ]
+# Forensic PNG screenshot capture via headless Chromium. Off the default
+# install path because Playwright pulls a sizeable browser binary; opt in
+# with `uv sync --extra screenshots` then `playwright install chromium`.
+screenshots = [
+    "playwright>=1.45",
+]
 
 [project.scripts]
 reckora = "reckora.cli:app"
@@ -120,6 +126,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["reportlab", "reportlab.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["playwright", "playwright.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

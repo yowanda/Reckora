@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from reckora.config import settings as engine_settings
 from reckora.evidence.archive import Archiver, WaybackArchiver
+from reckora.evidence.screenshot import Screenshotter
 from reckora.models.entity import Identifier
 from reckora.models.enums import IdentifierType
 from reckora.orchestrator import Orchestrator
@@ -21,6 +22,7 @@ from reckora.reports.json_export import to_dossier_dict
 from reckora.reports.markdown import to_dossier_md
 from reckora.reports.pdf import to_dossier_pdf
 from reckora_api.auth.models import UserRecord
+from reckora_api.config import APISettings
 from reckora_api.deps import current_user, get_orchestrator, get_subject_repo
 from reckora_api.investigations.schemas import (
     IdentifierIn,
@@ -28,6 +30,21 @@ from reckora_api.investigations.schemas import (
     SavedDossierPayload,
     SubjectSummary,
 )
+
+
+def _build_screenshotter(settings: APISettings) -> Screenshotter:
+    """Construct a default :class:`Screenshotter` for the API.
+
+    The Playwright import is local so the slim default install (without the
+    ``[screenshots]`` extra) doesn't pay any Playwright import cost.
+    """
+    from reckora.evidence.screenshot import PlaywrightScreenshotter
+
+    return PlaywrightScreenshotter(
+        output_dir=settings.screenshots_dir,
+        path_prefix=settings.screenshots_url_prefix,
+    )
+
 
 router = APIRouter(tags=["investigations"])
 
@@ -51,15 +68,16 @@ def _identifier_from(payload: IdentifierIn) -> Identifier:
 )
 async def create_investigation(
     payload: InvestigationRequest,
+    request: Request,
     user: Annotated[UserRecord, Depends(current_user)],
     orchestrator: Annotated[Orchestrator, Depends(get_orchestrator)],
     repo: Annotated[SubjectRepository, Depends(get_subject_repo)],
 ) -> SavedDossierPayload:
     """Run a Reckora investigation and persist the result.
 
-    Mirrors ``reckora investigate --save`` from the CLI: ``--archive`` and
-    ``--ai`` map onto request fields, the saved dossier is returned in full
-    so the client doesn't need a follow-up GET.
+    Mirrors ``reckora investigate --save`` from the CLI: ``--archive``,
+    ``--screenshot`` and ``--ai`` map onto request fields, the saved dossier
+    is returned in full so the client doesn't need a follow-up GET.
     """
     del user  # auth-only dependency
 
@@ -67,16 +85,22 @@ async def create_investigation(
     extras = [_identifier_from(e) for e in payload.extras]
 
     archiver: Archiver | None = WaybackArchiver() if payload.archive else None
+    api_settings: APISettings = request.app.state.settings
+    screenshotter: Screenshotter | None = (
+        _build_screenshotter(api_settings) if payload.screenshot else None
+    )
     try:
         subject, traces, edges = await orchestrator.investigate(
             seed,
             extra_identifiers=extras,
             archiver=archiver,
+            screenshotter=screenshotter,
         )
     finally:
-        close = getattr(archiver, "aclose", None)
-        if close is not None:
-            await close()
+        for resource in (archiver, screenshotter):
+            close = getattr(resource, "aclose", None)
+            if close is not None:
+                await close()
 
     summary_md: str | None = None
     hypotheses_md: str | None = None

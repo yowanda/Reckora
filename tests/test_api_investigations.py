@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -43,6 +44,40 @@ def test_create_investigation_with_extras(authed_client: TestClient) -> None:
     assert response.status_code == 201, response.text
     values = {i["value"] for i in response.json()["subject"]["identifiers"]}
     assert {"alice", "al1ce"}.issubset(values)
+
+
+def test_create_investigation_with_screenshot_flag(authed_client: TestClient) -> None:
+    """`screenshot: true` swaps the orchestrator's screenshotter for a fake.
+
+    We monkeypatch :func:`reckora_api.investigations.routes._build_screenshotter`
+    so the test never tries to launch real Chromium — Playwright is an
+    optional, browser-binary-heavy dependency that is intentionally absent
+    from CI.
+    """
+
+    shot = "/screenshots/alice.png"
+
+    class _FakeShotter:
+        async def screenshot(self, source_url: str) -> str | None:
+            return shot
+
+        async def aclose(self) -> None:
+            return None
+
+    with patch(
+        "reckora_api.investigations.routes._build_screenshotter",
+        return_value=_FakeShotter(),
+    ):
+        response = authed_client.post(
+            "/api/v1/investigations",
+            json={
+                "seed": {"kind": "username", "value": "alice"},
+                "screenshot": True,
+            },
+        )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["traces"][0]["evidence"]["screenshot_path"] == shot
 
 
 def test_create_investigation_unknown_identifier_kind_422(

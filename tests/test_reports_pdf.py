@@ -99,6 +99,22 @@ def test_pdf_renders_archive_url_when_present() -> None:
     assert len(with_archive) > len(without_archive)
 
 
+def test_pdf_renders_screenshot_path_when_present() -> None:
+    subject, traces, edges = _build_dossier()
+    shot = "/screenshots/alice.png"
+    augmented = [
+        traces[0].model_copy(
+            update={"evidence": traces[0].evidence.model_copy(update={"screenshot_path": shot})}
+        ),
+        traces[1],
+    ]
+    with_shot = to_dossier_pdf(subject=subject, traces=augmented, edges=edges)
+    without_shot = to_dossier_pdf(subject=subject, traces=traces, edges=edges)
+    assert with_shot.startswith(PDF_MAGIC)
+    assert without_shot.startswith(PDF_MAGIC)
+    assert len(with_shot) > len(without_shot)
+
+
 def test_pdf_includes_summary_and_hypotheses_only_when_present() -> None:
     subject, traces, edges = _build_dossier()
     bare = to_dossier_pdf(subject=subject, traces=traces, edges=edges)

@@ -380,6 +380,54 @@ def test_show_pdf_to_file(runner: CliRunner, tmp_path: Path) -> None:
     assert body.startswith(b"%PDF-")
 
 
+def test_investigate_with_screenshot_flag(runner: CliRunner) -> None:
+    shot = "/screenshots/alice.png"
+
+    class _FakeScreenshotter:
+        async def screenshot(self, source_url: str) -> str | None:
+            return shot
+
+        async def aclose(self) -> None:
+            return None
+
+    with (
+        patch("reckora.cli._build_orchestrator") as build_orch,
+        patch("reckora.cli._build_screenshotter", return_value=_FakeScreenshotter()),
+    ):
+        from reckora.orchestrator import Orchestrator
+
+        build_orch.return_value = Orchestrator([_FakeCollector()])
+        result = runner.invoke(
+            app,
+            [
+                "investigate",
+                "alice",
+                "--kind",
+                "username",
+                "--screenshot",
+                "--format",
+                "json",
+            ],
+        )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["traces"][0]["evidence"]["screenshot_path"] == shot
+
+
+def test_investigate_without_screenshot_flag_skips_capture(runner: CliRunner) -> None:
+    with patch("reckora.cli._build_orchestrator") as build_orch:
+        from reckora.orchestrator import Orchestrator
+
+        build_orch.return_value = Orchestrator([_FakeCollector()])
+        result = runner.invoke(
+            app,
+            ["investigate", "alice", "--kind", "username", "--format", "json"],
+        )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["traces"][0]["evidence"]["screenshot_path"] is None
+
+
 def test_kind_enum_round_trip() -> None:
     assert IdentifierType("username") is IdentifierType.USERNAME
     assert IdentifierType("domain") is IdentifierType.DOMAIN

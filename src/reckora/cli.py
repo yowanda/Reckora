@@ -15,6 +15,7 @@ from .collectors.web_profile import WebProfileCollector
 from .collectors.whois_rdap import WhoisRdapCollector
 from .config import settings
 from .evidence.archive import Archiver, WaybackArchiver
+from .evidence.screenshot import Screenshotter
 from .models.entity import Edge, Identifier, Subject, Trace
 from .models.enums import IdentifierType
 from .orchestrator import Orchestrator
@@ -132,17 +133,30 @@ def _emit(payload: str | bytes, *, output: Path | None) -> None:
     typer.echo(payload)
 
 
+def _build_screenshotter(output_dir: Path) -> Screenshotter:
+    """Construct a default :class:`Screenshotter` (Playwright) for the CLI.
+
+    The import is local so the slim default install (without the
+    ``[screenshots]`` extra) doesn't pay any Playwright import cost.
+    """
+    from .evidence.screenshot import PlaywrightScreenshotter
+
+    return PlaywrightScreenshotter(output_dir=output_dir)
+
+
 async def _run(
     seed: Identifier,
     extras: list[Identifier],
     use_ai: bool,
     archiver: Archiver | None = None,
+    screenshotter: Screenshotter | None = None,
 ) -> tuple[Subject, list[Trace], list[Edge], str | None, str | None]:
     orchestrator = _build_orchestrator()
     subject, traces, edges = await orchestrator.investigate(
         seed,
         extra_identifiers=extras,
         archiver=archiver,
+        screenshotter=screenshotter,
     )
 
     summary_md: str | None = None
@@ -227,6 +241,23 @@ def investigate(
             ),
         ),
     ] = False,
+    screenshot: Annotated[
+        bool,
+        typer.Option(
+            "--screenshot",
+            help=(
+                "Capture a forensic PNG of each evidence URL via headless Chromium "
+                "(requires the 'screenshots' extra; off by default)."
+            ),
+        ),
+    ] = False,
+    screenshots_dir: Annotated[
+        Path,
+        typer.Option(
+            "--screenshots-dir",
+            help="Directory where captured PNGs are written (created if missing).",
+        ),
+    ] = Path("screenshots"),
 ) -> None:
     """Run a Reckora investigation against a seed Identifier."""
     seed = _identifier_from(value, kind)
@@ -238,14 +269,24 @@ def investigate(
         extras.append(_identifier_from(v, k))
 
     archiver: Archiver | None = WaybackArchiver() if archive else None
+    screenshotter: Screenshotter | None = (
+        _build_screenshotter(screenshots_dir) if screenshot else None
+    )
 
     async def _go() -> tuple[Subject, list[Trace], list[Edge], str | None, str | None]:
         try:
-            return await _run(seed, extras, ai, archiver=archiver)
+            return await _run(
+                seed,
+                extras,
+                ai,
+                archiver=archiver,
+                screenshotter=screenshotter,
+            )
         finally:
-            close = getattr(archiver, "aclose", None)
-            if close is not None:
-                await close()
+            for resource in (archiver, screenshotter):
+                close = getattr(resource, "aclose", None)
+                if close is not None:
+                    await close()
 
     subject, traces, edges, summary_md, hypotheses_md = asyncio.run(_go())
 

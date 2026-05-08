@@ -88,6 +88,22 @@ def test_html_renders_archive_url_when_present() -> None:
     assert ">archive<" not in html_without
 
 
+def test_html_renders_screenshot_path_when_present() -> None:
+    subject, traces, edges = _build_dossier()
+    shot = "/screenshots/alice.png"
+    augmented = [
+        traces[0].model_copy(
+            update={"evidence": traces[0].evidence.model_copy(update={"screenshot_path": shot})}
+        ),
+        traces[1],
+    ]
+    html_with = to_dossier_html(subject=subject, traces=augmented, edges=edges)
+    html_without = to_dossier_html(subject=subject, traces=traces, edges=edges)
+    assert ">screenshot<" in html_with
+    assert shot in html_with
+    assert ">screenshot<" not in html_without
+
+
 def test_html_skips_empty_field_values() -> None:
     subject, traces, edges = _build_dossier()
     html = to_dossier_html(subject=subject, traces=traces, edges=edges)

@@ -44,6 +44,14 @@ class APISettings(BaseSettings):
         default=True,
         validation_alias="RECKORA_API_DOCS_ENABLED",
     )
+    screenshots_dir: str = Field(
+        default="screenshots",
+        validation_alias="RECKORA_API_SCREENSHOTS_DIR",
+    )
+    screenshots_url_prefix: str = Field(
+        default="/screenshots",
+        validation_alias="RECKORA_API_SCREENSHOTS_URL_PREFIX",
+    )
 
     @property
     def cors_origins(self) -> list[str]:
