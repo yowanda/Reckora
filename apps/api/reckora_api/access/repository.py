@@ -35,7 +35,7 @@ from reckora.models.entity import Identifier
 from reckora.models.enums import IdentifierType
 from reckora.persistence.repository import SavedDossierSummary
 
-_VisibleRow = tuple[str, str, str, str, str, str | None, str | None, int, int]
+_VisibleRow = tuple[str, str, str, str, str, str | None, str | None, int, int, int]
 # (identifier_type, identifier_value,
 #  matched_subject_id, matched_seed_kind, matched_seed_value, matched_created_at)
 _CrossRefRow = tuple[str, str, str, str, str, str]
@@ -580,7 +580,11 @@ class AccessRepository:
                 ) AS trace_count,
                 COALESCE(
                     (SELECT COUNT(*) FROM edges e WHERE e.subject_id = s.id), 0
-                ) AS edge_count
+                ) AS edge_count,
+                COALESCE(
+                    (SELECT COUNT(*) FROM dossier_anchors a WHERE a.subject_id = s.id),
+                    0
+                ) AS anchor_count
             FROM subjects s
             WHERE s.id IN (
                 SELECT subject_id FROM subject_owners    WHERE owner_user_id = :uid
@@ -598,7 +602,18 @@ class AccessRepository:
 
 
 def _row_to_summary(row: _VisibleRow) -> SavedDossierSummary:
-    sid, seed_kind, seed_value, identifiers_json, created_at, summary_md, hypotheses_md, t, e = row
+    (
+        sid,
+        seed_kind,
+        seed_value,
+        identifiers_json,
+        created_at,
+        summary_md,
+        hypotheses_md,
+        t,
+        e,
+        a,
+    ) = row
     seed = Identifier(type=IdentifierType(seed_kind), value=seed_value)
     ids_data = json.loads(identifiers_json)
     return SavedDossierSummary(
@@ -610,4 +625,5 @@ def _row_to_summary(row: _VisibleRow) -> SavedDossierSummary:
         edge_count=int(e),
         has_summary=summary_md is not None,
         has_hypotheses=hypotheses_md is not None,
+        has_anchor=int(a) > 0,
     )
