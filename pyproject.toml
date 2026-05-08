@@ -63,6 +63,14 @@ screenshots = [
 neo4j = [
     "neo4j>=5.0",
 ]
+# Dense-vector bio embeddings via `sentence-transformers`. Off the default
+# install path because the upstream library pulls a sizeable torch /
+# transformers stack; opt in with `uv sync --extra embeddings` when you
+# want the bio-similarity correlation rule to run on semantic similarity
+# instead of the lexical token-cosine baseline.
+embeddings = [
+    "sentence-transformers>=2.7",
+]
 
 [project.scripts]
 reckora = "reckora.cli:app"
@@ -143,6 +151,10 @@ module = ["phonenumbers", "phonenumbers.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = ["sentence_transformers"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_decorators = false
 disallow_untyped_defs = false
@@ -163,6 +175,14 @@ asyncio_mode = "auto"
 filterwarnings = [
     "error",
     "ignore::DeprecationWarning:imagehash.*",
+    # pytest-asyncio 1.3.0 leaks an event loop + socketpair via the
+    # deprecated ``asyncio.get_event_loop()`` path inside its
+    # ``_temporary_event_loop_policy`` helper. The leaks fire from
+    # GC at session teardown and surface as
+    # ``PytestUnraisableExceptionWarning`` whenever enough async
+    # tests run. Suppress just the warning class — it's a known
+    # third-party issue, not one of our resources.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
 ]
 
 [tool.coverage.run]
