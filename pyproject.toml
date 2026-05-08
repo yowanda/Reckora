@@ -39,6 +39,7 @@ dependencies = [
     "reportlab>=4.0",
     "phonenumbers>=8.13",
     "dnspython>=2.8.0",
+    "opentimestamps>=0.4.5",
 ]
 
 [project.optional-dependencies]

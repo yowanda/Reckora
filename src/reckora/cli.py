@@ -44,6 +44,13 @@ from .reports.html import to_dossier_html
 from .reports.json_export import to_dossier_json
 from .reports.markdown import to_dossier_md
 from .reports.pdf import to_dossier_pdf
+from .timestamp import (
+    AttestationStatus,
+    StampError,
+    TimestampStore,
+    stamp_dossier,
+    verify_dossier,
+)
 
 app = typer.Typer(
     help="Reckora — AI-Native OSINT Investigation System.",
@@ -464,6 +471,138 @@ def delete(
 def version() -> None:
     """Print the Reckora version."""
     typer.echo(__version__)
+
+
+# ----------------------------------------------------------------------
+#  reckora timestamp / verify
+# ----------------------------------------------------------------------
+#
+# Layer 7 commits a dossier's evidence chain to the public Bitcoin
+# blockchain via OpenTimestamps. ``timestamp`` builds a Merkle root
+# over every ``Evidence.payload_sha256`` and submits it to the public
+# calendar network; ``verify`` rebuilds the root and confirms the
+# stored receipt commits to the same set of evidence rows.
+
+
+def _timestamp_store(db_path: Path | None) -> TimestampStore:
+    """Resolve the on-disk ``.ots`` receipt directory.
+
+    Receipts are stored next to the SQLite database (``<db>/timestamps/``)
+    so a single ``--db`` override moves both the dossier rows and
+    their commitments together. Tests can pass an explicit ``db_path``
+    to scope the store inside ``tmp_path``.
+    """
+    db = db_path or Path(settings.db_path)
+    base_dir = db.parent if db.parent != Path() else Path()
+    return TimestampStore(base_dir / "timestamps")
+
+
+@app.command()
+def timestamp(
+    subject_id: Annotated[str, typer.Argument(help="Subject id to timestamp.")],
+    calendars: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--calendar",
+            help=(
+                "Override the OpenTimestamps calendar URL. Pass multiple "
+                "times to fan out to several calendars (default: the three "
+                "public OTS calendars)."
+            ),
+        ),
+    ] = None,
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="SQLite database path."),
+    ] = None,
+) -> None:
+    """Build a Merkle root over a dossier and stamp it via OpenTimestamps."""
+    with SQLiteSubjectRepository(db or settings.db_path) as repo:
+        dossier = repo.get(subject_id)
+    if dossier is None:
+        raise typer.BadParameter(f"no saved dossier with id {subject_id!r}")
+    store = _timestamp_store(db)
+    try:
+        from .timestamp.ots import DEFAULT_CALENDARS
+
+        cal_tuple: tuple[str, ...] = tuple(calendars) if calendars else DEFAULT_CALENDARS
+        ts = stamp_dossier(
+            dossier,
+            calendars=cal_tuple,
+            user_agent=settings.user_agent,
+        )
+    except StampError as exc:
+        typer.echo(f"timestamp failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    store.save(ts)
+    typer.echo(
+        f"stamped dossier {subject_id} "
+        f"(merkle root {ts.merkle_root_sha256[:16]}…, "
+        f"{len(ts.leaf_hashes)} leaves, "
+        f"calendars: {', '.join(ts.calendars)})"
+    )
+
+
+@app.command()
+def verify(
+    subject_id: Annotated[str, typer.Argument(help="Subject id to verify.")],
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="SQLite database path."),
+    ] = None,
+) -> None:
+    """Verify a dossier's stored OpenTimestamps receipt.
+
+    Re-builds the Merkle root from the leaves recorded at stamp time
+    and confirms the receipt commits to the same root. Reports the
+    strongest attestation found in the receipt (Bitcoin / Litecoin /
+    pending calendar).
+    """
+    with SQLiteSubjectRepository(db or settings.db_path) as repo:
+        dossier = repo.get(subject_id)
+    if dossier is None:
+        raise typer.BadParameter(f"no saved dossier with id {subject_id!r}")
+    store = _timestamp_store(db)
+    stamp = store.load(subject_id)
+    if stamp is None:
+        typer.echo(f"dossier {subject_id} has no OpenTimestamps receipt", err=True)
+        raise typer.Exit(code=1)
+    try:
+        result = verify_dossier(dossier, stamp)
+    except StampError as exc:
+        typer.echo(f"verify failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    if not result.valid:
+        typer.echo(
+            "✗ receipt does NOT commit to the rebuilt root\n"
+            f"  receipt root  : {result.receipt_root_sha256}\n"
+            f"  rebuilt root  : {result.expected_root_sha256}",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if result.status is AttestationStatus.BITCOIN:
+        typer.echo(
+            f"✓ verified (bitcoin block {result.bitcoin_block_height})\n"
+            f"  merkle root: {result.expected_root_sha256}"
+        )
+    elif result.status is AttestationStatus.LITECOIN:
+        typer.echo(
+            f"✓ verified (litecoin block {result.litecoin_block_height})\n"
+            f"  merkle root: {result.expected_root_sha256}"
+        )
+    elif result.status is AttestationStatus.PENDING:
+        cals = ", ".join(result.pending_calendars) or "(unknown)"
+        typer.echo(
+            "⏳ pending — receipt is valid but not yet anchored in Bitcoin\n"
+            f"  pending calendars: {cals}\n"
+            f"  re-run `reckora verify {subject_id}` after the next Bitcoin block "
+            "(~10 min - several hours)."
+        )
+    else:
+        typer.echo(
+            "? receipt parsed but contains no attestations (likely a stub fixture)\n"
+            f"  merkle root: {result.expected_root_sha256}"
+        )
 
 
 # ----------------------------------------------------------------------
