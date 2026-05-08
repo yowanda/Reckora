@@ -36,6 +36,7 @@ dependencies = [
     "pyjwt>=2.8",
     "bcrypt>=4.0",
     "python-multipart>=0.0.9",
+    "reportlab>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -115,6 +116,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["jwt", "jwt.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["reportlab", "reportlab.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

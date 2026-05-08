@@ -317,6 +317,69 @@ def test_investigate_without_archive_flag_skips_archiving(runner: CliRunner) -> 
     assert payload["traces"][0]["evidence"]["archive_url"] is None
 
 
+def test_investigate_writes_pdf_to_file(runner: CliRunner, tmp_path: Path) -> None:
+    out = tmp_path / "dossier.pdf"
+    with patch("reckora.cli._build_orchestrator") as build_orch:
+        from reckora.orchestrator import Orchestrator
+
+        build_orch.return_value = Orchestrator([_FakeCollector()])
+        result = runner.invoke(
+            app,
+            ["investigate", "alice", "--kind", "username", "--output", str(out)],
+        )
+    assert result.exit_code == 0, result.stdout
+    body = out.read_bytes()
+    assert body.startswith(b"%PDF-")
+    assert b"%%EOF" in body[-32:]
+
+
+def test_investigate_pdf_to_stdout(runner: CliRunner) -> None:
+    with patch("reckora.cli._build_orchestrator") as build_orch:
+        from reckora.orchestrator import Orchestrator
+
+        build_orch.return_value = Orchestrator([_FakeCollector()])
+        result = runner.invoke(
+            app,
+            ["investigate", "alice", "--kind", "username", "--format", "pdf"],
+        )
+    assert result.exit_code == 0, result.stdout
+    body = result.stdout_bytes
+    assert body.startswith(b"%PDF-")
+
+
+def test_show_pdf_to_file(runner: CliRunner, tmp_path: Path) -> None:
+    db_path = tmp_path / "reckora.db"
+    out = tmp_path / "dossier.pdf"
+    with patch("reckora.cli._build_orchestrator") as build_orch:
+        from reckora.orchestrator import Orchestrator
+
+        build_orch.return_value = Orchestrator([_FakeCollector()])
+        save_result = runner.invoke(
+            app,
+            [
+                "investigate",
+                "alice",
+                "--kind",
+                "username",
+                "--save",
+                "--db",
+                str(db_path),
+                "--format",
+                "json",
+            ],
+        )
+    assert save_result.exit_code == 0
+    saved_id = json.loads(save_result.stdout)["subject"]["id"]
+
+    show_result = runner.invoke(
+        app,
+        ["show", saved_id, "--db", str(db_path), "--output", str(out)],
+    )
+    assert show_result.exit_code == 0, show_result.stdout
+    body = out.read_bytes()
+    assert body.startswith(b"%PDF-")
+
+
 def test_kind_enum_round_trip() -> None:
     assert IdentifierType("username") is IdentifierType.USERNAME
     assert IdentifierType("domain") is IdentifierType.DOMAIN

@@ -19,6 +19,7 @@ from reckora.reasoning.summarize import summarize
 from reckora.reports.html import to_dossier_html
 from reckora.reports.json_export import to_dossier_dict
 from reckora.reports.markdown import to_dossier_md
+from reckora.reports.pdf import to_dossier_pdf
 from reckora_api.auth.models import UserRecord
 from reckora_api.deps import current_user, get_orchestrator, get_subject_repo
 from reckora_api.investigations.schemas import (
@@ -187,6 +188,7 @@ def get_subject(
                 "text/html": {},
                 "text/markdown": {},
                 "application/json": {},
+                "application/pdf": {},
             }
         }
     },
@@ -195,7 +197,7 @@ def get_subject_dossier(
     subject_id: str,
     user: Annotated[UserRecord, Depends(current_user)],
     repo: Annotated[SubjectRepository, Depends(get_subject_repo)],
-    fmt: Annotated[str, Query(alias="format", pattern=r"^(md|json|html)$")] = "html",
+    fmt: Annotated[str, Query(alias="format", pattern=r"^(md|json|html|pdf)$")] = "html",
 ) -> Response:
     """Render a saved dossier in the requested format."""
     del user
@@ -223,6 +225,20 @@ def get_subject_dossier(
                 summary=dossier.summary,
                 hypotheses=dossier.hypotheses,
             )
+        )
+    if fmt == "pdf":
+        pdf_bytes = to_dossier_pdf(
+            subject=dossier.subject,
+            traces=dossier.traces,
+            edges=dossier.edges,
+            summary=dossier.summary,
+            hypotheses=dossier.hypotheses,
+        )
+        filename = f"{dossier.id}.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{filename}"'},
         )
     md = to_dossier_md(
         subject=dossier.subject,
