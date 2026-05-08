@@ -79,6 +79,41 @@ link next to the live source URL.
 Set `OPENAI_API_KEY` to enable `--ai` (LLM-generated summary + hypotheses,
 evidence-bounded with `ev:<8-hex>` citations).
 
+## Optional Neo4j backend
+
+`SQLiteSubjectRepository` is the default store. For environments that want
+graph-native cross-subject queries (e.g. "every dossier that ever touched
+this email"), Reckora ships an optional Neo4j adapter behind the same
+`SubjectRepository` seam:
+
+```bash
+uv sync --extra neo4j
+```
+
+```python
+from neo4j import GraphDatabase
+from reckora.persistence import Neo4jSubjectRepository
+
+driver = GraphDatabase.driver(
+    "bolt://localhost:7687",
+    auth=("neo4j", "secret"),
+)
+repo = Neo4jSubjectRepository(driver, database="reckora")
+# same surface as SQLiteSubjectRepository:
+#   repo.save(subject=..., traces=..., edges=...)
+#   repo.get(subject_id)
+#   repo.list_recent(limit=20)
+#   repo.delete(subject_id)
+```
+
+The graph maps `(:Subject)-[:HAS_IDENTIFIER]->(:Identifier)` with
+`Identifier` nodes shared across subjects, so a follow-up Cypher query like
+`MATCH (i:Identifier {value: 'bob@example.com'})<-[:HAS_IDENTIFIER]-(s:Subject)
+RETURN s` lists every saved investigation that touched that identifier —
+something the relational backend cannot express. Trace and edge JSON is
+stored verbatim on subject-owned `(:TraceNode)` / `(:EdgeNode)` children so
+the round-trip preserves bit-for-bit Pydantic fidelity.
+
 ## HTTP API
 
 Reckora ships a FastAPI backend (`apps/api/reckora_api`) that wraps the same
