@@ -112,6 +112,89 @@ def test_investigate_invalid_extra_format(runner: CliRunner) -> None:
     assert result.exit_code != 0
 
 
+def test_investigate_save_then_list_and_show(runner: CliRunner, tmp_path: Path) -> None:
+    db_path = tmp_path / "reckora.db"
+    with patch("reckora.cli._build_orchestrator") as build_orch:
+        from reckora.orchestrator import Orchestrator
+
+        build_orch.return_value = Orchestrator([_FakeCollector()])
+        save_result = runner.invoke(
+            app,
+            [
+                "investigate",
+                "alice",
+                "--kind",
+                "username",
+                "--save",
+                "--db",
+                str(db_path),
+                "--format",
+                "json",
+            ],
+        )
+    assert save_result.exit_code == 0, save_result.stdout
+    saved_payload = json.loads(save_result.stdout)
+    saved_id = saved_payload["subject"]["id"]
+
+    list_result = runner.invoke(app, ["list", "--db", str(db_path)])
+    assert list_result.exit_code == 0, list_result.stdout
+    assert saved_id in list_result.stdout
+    assert "username:alice" in list_result.stdout
+
+    show_result = runner.invoke(
+        app,
+        ["show", saved_id, "--db", str(db_path), "--format", "json"],
+    )
+    assert show_result.exit_code == 0, show_result.stdout
+    shown = json.loads(show_result.stdout)
+    assert shown["subject"]["id"] == saved_id
+    assert shown["subject"]["seed_identifier"]["value"] == "alice"
+
+
+def test_list_empty_store(runner: CliRunner, tmp_path: Path) -> None:
+    db_path = tmp_path / "reckora.db"
+    result = runner.invoke(app, ["list", "--db", str(db_path)])
+    assert result.exit_code == 0
+    assert "no saved dossiers" in result.stdout
+
+
+def test_show_unknown_id_errors(runner: CliRunner, tmp_path: Path) -> None:
+    db_path = tmp_path / "reckora.db"
+    result = runner.invoke(app, ["show", "subj-missing", "--db", str(db_path)])
+    assert result.exit_code != 0
+
+
+def test_delete_dossier(runner: CliRunner, tmp_path: Path) -> None:
+    db_path = tmp_path / "reckora.db"
+    with patch("reckora.cli._build_orchestrator") as build_orch:
+        from reckora.orchestrator import Orchestrator
+
+        build_orch.return_value = Orchestrator([_FakeCollector()])
+        save_result = runner.invoke(
+            app,
+            [
+                "investigate",
+                "alice",
+                "--kind",
+                "username",
+                "--save",
+                "--db",
+                str(db_path),
+                "--format",
+                "json",
+            ],
+        )
+    assert save_result.exit_code == 0
+    saved_id = json.loads(save_result.stdout)["subject"]["id"]
+
+    delete_result = runner.invoke(app, ["delete", saved_id, "--db", str(db_path)])
+    assert delete_result.exit_code == 0
+    assert saved_id in delete_result.stdout
+
+    second_delete = runner.invoke(app, ["delete", saved_id, "--db", str(db_path)])
+    assert second_delete.exit_code != 0
+
+
 def test_kind_enum_round_trip() -> None:
     assert IdentifierType("username") is IdentifierType.USERNAME
     assert IdentifierType("domain") is IdentifierType.DOMAIN
