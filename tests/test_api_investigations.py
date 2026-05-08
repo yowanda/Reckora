@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable, Sequence
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+
+from reckora.models.entity import Trace
+
+if TYPE_CHECKING:
+    from reckora.evidence.anchor import Anchor
 
 
 def test_create_investigation_requires_auth(client: TestClient) -> None:
@@ -349,3 +356,253 @@ def test_openapi_advertises_versioned_endpoints(client: TestClient) -> None:
 def test_openapi_payload_is_valid_json(client: TestClient) -> None:
     raw = client.get("/openapi.json").content
     assert json.loads(raw)["info"]["title"] == "Reckora API"
+
+
+# ---------------------------------------------------------------------------
+# Layer 7: ``anchor: true`` request flag.
+#
+# Mirrors the ``--anchor`` flag on the CLI: minting a Merkle root over the
+# collected traces, soliciting OpenTimestamps receipts, persisting the
+# anchor, and surfacing it on every dossier endpoint. We patch
+# ``reckora_api.investigations.routes.anchor_traces`` so tests are
+# hermetic — they never go to the public OpenTimestamps calendars.
+# ---------------------------------------------------------------------------
+
+
+def _stub_anchor_traces() -> Callable[[Sequence[Trace]], Awaitable[Anchor]]:
+    """Build a deterministic stand-in for ``anchor_traces`` that derives the
+    Merkle root from the supplied traces (so verify-anchor-style checks
+    still pass) and returns one canned calendar receipt.
+    """
+    from datetime import UTC, datetime
+
+    from reckora.evidence.anchor import Anchor
+    from reckora.evidence.merkle import compute_dossier_root
+    from reckora.evidence.timestamp import CalendarReceipt
+
+    async def _fake(traces: Sequence[Trace]) -> Anchor:
+        root, leaves = compute_dossier_root(traces)
+        return Anchor(
+            merkle_root=root,
+            leaf_hashes=leaves,
+            receipts=[
+                CalendarReceipt(
+                    calendar_url="https://stub.calendar.example",
+                    receipt_b64="ZmFrZQ==",
+                    submitted_at=datetime(2026, 1, 1, tzinfo=UTC),
+                )
+            ],
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+    return _fake
+
+
+def test_create_investigation_with_anchor_flag(authed_client: TestClient) -> None:
+    """``anchor: true`` triggers ``anchor_traces`` and surfaces the resulting
+    Merkle root + calendar receipts on the response payload."""
+    with patch(
+        "reckora_api.investigations.routes.anchor_traces",
+        side_effect=_stub_anchor_traces(),
+    ):
+        response = authed_client.post(
+            "/api/v1/investigations",
+            json={
+                "seed": {"kind": "username", "value": "alice"},
+                "anchor": True,
+            },
+        )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    anchor = body["anchor"]
+    assert anchor is not None
+    assert len(anchor["merkle_root"]) == 64
+    leaves = anchor["leaf_hashes"]
+    assert leaves == [body["traces"][0]["evidence"]["payload_sha256"]]
+    assert [r["calendar_url"] for r in anchor["receipts"]] == ["https://stub.calendar.example"]
+
+
+def test_create_investigation_without_anchor_omits_field(authed_client: TestClient) -> None:
+    """The default request must NOT mint an anchor — anchoring is opt-in."""
+    response = authed_client.post(
+        "/api/v1/investigations",
+        json={"seed": {"kind": "username", "value": "alice"}},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["anchor"] is None
+
+
+def test_create_investigation_anchor_with_no_traces_returns_422(
+    authed_client: TestClient,
+) -> None:
+    """Anchoring a run that produced zero traces is meaningless — the API
+    must reject it with 422 rather than silently emitting a root over an
+    empty set. We force "no traces" by seeding with an identifier kind
+    the fake collector does not support (``email``)."""
+    response = authed_client.post(
+        "/api/v1/investigations",
+        json={
+            "seed": {"kind": "email", "value": "alice@example.com"},
+            "anchor": True,
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert "anchor" in response.json()["detail"].lower()
+
+
+def test_list_subjects_includes_has_anchor(authed_client: TestClient) -> None:
+    """``has_anchor`` on the list summary must reflect whether the dossier
+    was saved with a Merkle anchor or not."""
+    with patch(
+        "reckora_api.investigations.routes.anchor_traces",
+        side_effect=_stub_anchor_traces(),
+    ):
+        anchored_id = authed_client.post(
+            "/api/v1/investigations",
+            json={
+                "seed": {"kind": "username", "value": "alice"},
+                "anchor": True,
+            },
+        ).json()["id"]
+    plain_id = authed_client.post(
+        "/api/v1/investigations",
+        json={"seed": {"kind": "username", "value": "bob"}},
+    ).json()["id"]
+
+    rows = authed_client.get("/api/v1/subjects").json()
+    by_id = {r["id"]: r for r in rows}
+    assert by_id[anchored_id]["has_anchor"] is True
+    assert by_id[plain_id]["has_anchor"] is False
+
+
+def test_get_subject_returns_persisted_anchor(authed_client: TestClient) -> None:
+    """The single-subject GET must round-trip the anchor that was minted at
+    investigation time (proves the SQLite anchor row reloads cleanly)."""
+    with patch(
+        "reckora_api.investigations.routes.anchor_traces",
+        side_effect=_stub_anchor_traces(),
+    ):
+        created = authed_client.post(
+            "/api/v1/investigations",
+            json={
+                "seed": {"kind": "username", "value": "alice"},
+                "anchor": True,
+            },
+        ).json()
+
+    fetched = authed_client.get(f"/api/v1/subjects/{created['id']}").json()
+    assert fetched["anchor"] == created["anchor"]
+    assert fetched["anchor"]["merkle_root"] == created["anchor"]["merkle_root"]
+
+
+def test_get_subject_dossier_html_renders_anchor(authed_client: TestClient) -> None:
+    with patch(
+        "reckora_api.investigations.routes.anchor_traces",
+        side_effect=_stub_anchor_traces(),
+    ):
+        created = authed_client.post(
+            "/api/v1/investigations",
+            json={
+                "seed": {"kind": "username", "value": "alice"},
+                "anchor": True,
+            },
+        ).json()
+    response = authed_client.get(
+        f"/api/v1/subjects/{created['id']}/dossier",
+        params={"format": "html"},
+    )
+    assert response.status_code == 200
+    body = response.text
+    assert "Cross-trace anchor" in body
+    assert created["anchor"]["merkle_root"] in body
+    assert "stub.calendar.example" in body
+
+
+def test_get_subject_dossier_markdown_renders_anchor(authed_client: TestClient) -> None:
+    with patch(
+        "reckora_api.investigations.routes.anchor_traces",
+        side_effect=_stub_anchor_traces(),
+    ):
+        created = authed_client.post(
+            "/api/v1/investigations",
+            json={
+                "seed": {"kind": "username", "value": "alice"},
+                "anchor": True,
+            },
+        ).json()
+    response = authed_client.get(
+        f"/api/v1/subjects/{created['id']}/dossier",
+        params={"format": "md"},
+    )
+    assert response.status_code == 200
+    md = response.text
+    assert "## Cross-trace anchor" in md
+    assert f"merkle_root: `{created['anchor']['merkle_root']}`" in md
+    assert "stub.calendar.example" in md
+
+
+def test_get_subject_dossier_json_renders_anchor(authed_client: TestClient) -> None:
+    with patch(
+        "reckora_api.investigations.routes.anchor_traces",
+        side_effect=_stub_anchor_traces(),
+    ):
+        created = authed_client.post(
+            "/api/v1/investigations",
+            json={
+                "seed": {"kind": "username", "value": "alice"},
+                "anchor": True,
+            },
+        ).json()
+    response = authed_client.get(
+        f"/api/v1/subjects/{created['id']}/dossier",
+        params={"format": "json"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["anchor"]["merkle_root"] == created["anchor"]["merkle_root"]
+    assert body["anchor"]["leaf_hashes"] == created["anchor"]["leaf_hashes"]
+    assert [r["calendar_url"] for r in body["anchor"]["receipts"]] == [
+        "https://stub.calendar.example"
+    ]
+
+
+def test_get_subject_dossier_pdf_renders_with_anchor(authed_client: TestClient) -> None:
+    """The PDF endpoint must still render successfully when an anchor is
+    present — we can't easily extract anchor text from binary PDF, but a
+    crashy PDF renderer is the most likely regression."""
+    with patch(
+        "reckora_api.investigations.routes.anchor_traces",
+        side_effect=_stub_anchor_traces(),
+    ):
+        created = authed_client.post(
+            "/api/v1/investigations",
+            json={
+                "seed": {"kind": "username", "value": "alice"},
+                "anchor": True,
+            },
+        ).json()
+    response = authed_client.get(
+        f"/api/v1/subjects/{created['id']}/dossier",
+        params={"format": "pdf"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content.startswith(b"%PDF-")
+
+
+def test_get_subject_dossier_html_omits_anchor_when_absent(
+    authed_client: TestClient,
+) -> None:
+    """A dossier saved without anchoring must not show a phantom
+    'Cross-trace anchor' section — guards against an accidentally
+    unconditional render."""
+    created = authed_client.post(
+        "/api/v1/investigations",
+        json={"seed": {"kind": "username", "value": "alice"}},
+    ).json()
+    response = authed_client.get(
+        f"/api/v1/subjects/{created['id']}/dossier",
+        params={"format": "html"},
+    )
+    assert response.status_code == 200
+    assert "Cross-trace anchor" not in response.text
