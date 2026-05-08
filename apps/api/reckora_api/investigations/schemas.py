@@ -49,7 +49,12 @@ class InvestigationRequest(BaseModel):
 
 
 class SubjectSummary(BaseModel):
-    """List-row payload returned by ``GET /api/v1/subjects``."""
+    """List-row payload returned by ``GET /api/v1/subjects``.
+
+    ``owner_username`` is ``None`` for legacy un-owned dossiers (created
+    via the CLI before RBAC landed, or before being claimed by an
+    admin). The frontend renders these as "system" rows.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -61,6 +66,7 @@ class SubjectSummary(BaseModel):
     edge_count: int
     has_summary: bool
     has_hypotheses: bool
+    owner_username: str | None = None
 
 
 class SavedDossierPayload(BaseModel):
@@ -68,6 +74,8 @@ class SavedDossierPayload(BaseModel):
 
     Shape matches :func:`reckora.reports.json_export.to_dossier_dict` so the
     frontend can reuse the same TypeScript type for both endpoints.
+    ``owner_username`` is omitted (``None``) for un-owned dossiers; see
+    :class:`SubjectSummary` for the rationale.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -80,3 +88,4 @@ class SavedDossierPayload(BaseModel):
     anomalies: list[dict[str, Any]]
     edges: list[dict[str, Any]]
     ai: dict[str, Any]
+    owner_username: str | None = None

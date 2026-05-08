@@ -15,7 +15,7 @@ from reckora.evidence.screenshot import Screenshotter
 from reckora.models.entity import Identifier
 from reckora.models.enums import IdentifierType
 from reckora.orchestrator import Orchestrator
-from reckora.persistence.repository import SubjectRepository
+from reckora.persistence.repository import SavedDossier, SubjectRepository
 from reckora.reasoning.client import ReasoningClient
 from reckora.reasoning.hypothesize import hypothesize
 from reckora.reasoning.summarize import summarize
@@ -23,15 +23,41 @@ from reckora.reports.html import to_dossier_html
 from reckora.reports.json_export import to_dossier_dict
 from reckora.reports.markdown import to_dossier_md
 from reckora.reports.pdf import to_dossier_pdf
-from reckora_api.auth.models import UserRecord
+from reckora_api.access.repository import AccessRepository
+from reckora_api.auth.models import Role, UserRecord
+from reckora_api.auth.repository import UserRepository
 from reckora_api.config import APISettings
-from reckora_api.deps import current_user, get_orchestrator, get_subject_repo
+from reckora_api.deps import (
+    current_user,
+    get_access_repo,
+    get_orchestrator,
+    get_subject_repo,
+    get_user_repo,
+)
 from reckora_api.investigations.schemas import (
     IdentifierIn,
     InvestigationRequest,
     SavedDossierPayload,
     SubjectSummary,
 )
+
+
+def _resolve_owner_username(
+    subject_id: str,
+    access_repo: AccessRepository,
+    user_repo: UserRepository,
+) -> str | None:
+    """Look up the owner's username for a subject, or ``None`` if un-owned.
+
+    Resolving by username (rather than returning the numeric id) keeps
+    the response payload portable: clients shouldn't need to memoise the
+    user table to render a "owned by" badge.
+    """
+    owner_id = access_repo.get_owner(subject_id)
+    if owner_id is None:
+        return None
+    record = user_repo.get_by_id(owner_id)
+    return None if record is None else record.username
 
 
 def _build_screenshotter(settings: APISettings) -> Screenshotter:
@@ -84,15 +110,15 @@ async def create_investigation(
     user: Annotated[UserRecord, Depends(current_user)],
     orchestrator: Annotated[Orchestrator, Depends(get_orchestrator)],
     repo: Annotated[SubjectRepository, Depends(get_subject_repo)],
+    access_repo: Annotated[AccessRepository, Depends(get_access_repo)],
 ) -> SavedDossierPayload:
     """Run a Reckora investigation and persist the result.
 
     Mirrors ``reckora investigate --save`` from the CLI: ``--archive``,
     ``--screenshot`` and ``--ai`` map onto request fields, the saved dossier
-    is returned in full so the client doesn't need a follow-up GET.
+    is returned in full so the client doesn't need a follow-up GET. The
+    invoking user is recorded as the dossier's owner (Phase 5 RBAC).
     """
-    del user  # auth-only dependency
-
     seed = _identifier_from(payload.seed)
     extras = [_identifier_from(e) for e in payload.extras]
 
@@ -146,6 +172,7 @@ async def create_investigation(
         summary=summary_md,
         hypotheses=hypotheses_md,
     )
+    access_repo.set_owner(summary_row.id, user.id)
     payload_dict = to_dossier_dict(
         subject=subject,
         traces=traces,
@@ -162,6 +189,7 @@ async def create_investigation(
         anomalies=payload_dict["anomalies"],
         edges=payload_dict["edges"],
         ai=payload_dict["ai"],
+        owner_username=user.username,
     )
 
 
@@ -169,11 +197,32 @@ async def create_investigation(
 def list_subjects(
     user: Annotated[UserRecord, Depends(current_user)],
     repo: Annotated[SubjectRepository, Depends(get_subject_repo)],
+    access_repo: Annotated[AccessRepository, Depends(get_access_repo)],
+    user_repo: Annotated[UserRepository, Depends(get_user_repo)],
     limit: Annotated[int, Query(ge=1, le=200)] = 20,
 ) -> list[SubjectSummary]:
-    """Return the most recently saved dossiers, newest first."""
-    del user
-    rows = repo.list_recent(limit=limit)
+    """List saved dossiers visible to the current user, newest first.
+
+    - **Admins** see every saved dossier (including legacy un-owned rows
+      created by the CLI before RBAC).
+    - **Viewers** see only dossiers they own or that have been explicitly
+      shared with them via the sharing endpoints.
+    """
+    if user.role is Role.ADMIN:
+        rows = repo.list_recent(limit=limit)
+    else:
+        rows = access_repo.list_visible_summaries(user.id, limit=limit)
+    # Cache user lookups so a 50-row listing with shared subjects from a
+    # handful of teammates doesn't hammer the user table.
+    owner_cache: dict[str, str | None] = {}
+
+    def _owner(subject_id: str) -> str | None:
+        if subject_id not in owner_cache:
+            owner_cache[subject_id] = _resolve_owner_username(
+                subject_id, access_repo, user_repo
+            )
+        return owner_cache[subject_id]
+
     return [
         SubjectSummary(
             id=r.id,
@@ -184,9 +233,40 @@ def list_subjects(
             edge_count=r.edge_count,
             has_summary=r.has_summary,
             has_hypotheses=r.has_hypotheses,
+            owner_username=_owner(r.id),
         )
         for r in rows
     ]
+
+
+def _load_authorised_dossier(
+    subject_id: str,
+    user: UserRecord,
+    repo: SubjectRepository,
+    access_repo: AccessRepository,
+) -> SavedDossier:
+    """Fetch a dossier and verify the actor has read access.
+
+    Raises 404 (rather than 403) when a viewer asks for a subject they
+    cannot see, so a non-owner cannot probe the API for which subject
+    ids exist on the system. Admins skip the access check entirely so
+    they can manage legacy un-owned rows created by the CLI.
+    """
+    dossier = repo.get(subject_id)
+    if dossier is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no saved dossier with id {subject_id!r}",
+        )
+    if user.role is Role.ADMIN:
+        return dossier
+    owner_id = access_repo.get_owner(subject_id)
+    if owner_id != user.id and not access_repo.can_read(subject_id, user.id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no saved dossier with id {subject_id!r}",
+        )
+    return dossier
 
 
 @router.get("/subjects/{subject_id}", response_model=SavedDossierPayload)
@@ -194,15 +274,11 @@ def get_subject(
     subject_id: str,
     user: Annotated[UserRecord, Depends(current_user)],
     repo: Annotated[SubjectRepository, Depends(get_subject_repo)],
+    access_repo: Annotated[AccessRepository, Depends(get_access_repo)],
+    user_repo: Annotated[UserRepository, Depends(get_user_repo)],
 ) -> SavedDossierPayload:
-    """Return the rehydrated dossier for ``subject_id``."""
-    del user
-    dossier = repo.get(subject_id)
-    if dossier is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"no saved dossier with id {subject_id!r}",
-        )
+    """Return the rehydrated dossier for ``subject_id`` (auth-gated)."""
+    dossier = _load_authorised_dossier(subject_id, user, repo, access_repo)
     payload_dict = to_dossier_dict(
         subject=dossier.subject,
         traces=dossier.traces,
@@ -219,6 +295,7 @@ def get_subject(
         anomalies=payload_dict["anomalies"],
         edges=payload_dict["edges"],
         ai=payload_dict["ai"],
+        owner_username=_resolve_owner_username(subject_id, access_repo, user_repo),
     )
 
 
@@ -239,16 +316,11 @@ def get_subject_dossier(
     subject_id: str,
     user: Annotated[UserRecord, Depends(current_user)],
     repo: Annotated[SubjectRepository, Depends(get_subject_repo)],
+    access_repo: Annotated[AccessRepository, Depends(get_access_repo)],
     fmt: Annotated[str, Query(alias="format", pattern=r"^(md|json|html|pdf)$")] = "html",
 ) -> Response:
-    """Render a saved dossier in the requested format."""
-    del user
-    dossier = repo.get(subject_id)
-    if dossier is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"no saved dossier with id {subject_id!r}",
-        )
+    """Render a saved dossier in the requested format (auth-gated)."""
+    dossier = _load_authorised_dossier(subject_id, user, repo, access_repo)
     if fmt == "html":
         body = to_dossier_html(
             subject=dossier.subject,
@@ -296,14 +368,39 @@ def get_subject_dossier(
     "/subjects/{subject_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
+    responses={
+        403: {"description": "shared viewer cannot delete a dossier they don't own"},
+        404: {"description": "subject not found or not visible to actor"},
+    },
 )
 def delete_subject(
     subject_id: str,
     user: Annotated[UserRecord, Depends(current_user)],
     repo: Annotated[SubjectRepository, Depends(get_subject_repo)],
+    access_repo: Annotated[AccessRepository, Depends(get_access_repo)],
 ) -> Response:
-    """Delete a saved dossier."""
-    del user
+    """Delete a saved dossier.
+
+    Authorisation:
+
+    - Admins can delete any subject (including legacy un-owned rows).
+    - Owners can delete their own subjects.
+    - Shared viewers cannot delete; they get 403 (the subject *is*
+      visible to them, so 404 would be misleading).
+    - Non-owner / non-shared viewers get 404 to avoid leaking existence.
+    """
+    if user.role is not Role.ADMIN:
+        owner_id = access_repo.get_owner(subject_id)
+        if owner_id != user.id:
+            if owner_id is not None and access_repo.can_read(subject_id, user.id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="only the dossier owner can delete it",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"no saved dossier with id {subject_id!r}",
+            )
     if not repo.delete(subject_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

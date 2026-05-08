@@ -15,6 +15,7 @@ from typing import Annotated
 import typer
 import uvicorn
 
+from reckora_api.auth.models import Role
 from reckora_api.auth.passwords import hash_password
 from reckora_api.auth.repository import UserRepository
 from reckora_api.config import APISettings
@@ -66,16 +67,32 @@ def create_user(
             show_default=False,
         ),
     ] = None,
+    viewer: Annotated[
+        bool,
+        typer.Option(
+            "--viewer/--admin",
+            help=(
+                "Create the user as a viewer (sees only their own + shared "
+                "dossiers). Default is --admin so the CLI keeps acting as the "
+                "operator-bootstrap path."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Insert a user into the API's SQLite store.
 
     Useful for bootstrapping the first account or scripting headless setup.
     Idempotent only via uniqueness — a duplicate username will fail loudly.
+
+    The CLI defaults to ``--admin`` because it is the operator's bootstrap
+    surface; the HTTP ``POST /auth/register`` endpoint defaults to viewer
+    so self-service registration cannot escalate privileges.
     """
     if password is None:
         password = getpass("password: ")
     if len(password) < 8:
         raise typer.BadParameter("password must be at least 8 characters")
+    role = Role.VIEWER if viewer else Role.ADMIN
     s = APISettings()
     with UserRepository(s.db_path) as repo:
         if repo.get_by_username(username) is not None:
@@ -83,8 +100,9 @@ def create_user(
         record = repo.create_user(
             username=username,
             password_hash=hash_password(password),
+            role=role,
         )
-    typer.echo(f"created user {record.username} (id={record.id})")
+    typer.echo(f"created user {record.username} (id={record.id}, role={record.role.value})")
 
 
 if __name__ == "__main__":

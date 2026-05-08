@@ -24,8 +24,11 @@ from reckora.collectors.whois_rdap import WhoisRdapCollector
 from reckora.config import settings as engine_settings
 from reckora.orchestrator import Orchestrator
 from reckora.persistence.sqlite import SQLiteSubjectRepository
+from reckora_api.access.repository import AccessRepository
+from reckora_api.access.routes import router as sharing_router
 from reckora_api.auth.repository import UserRepository
 from reckora_api.auth.routes import router as auth_router
+from reckora_api.auth.routes import users_router as auth_users_router
 from reckora_api.config import APISettings
 from reckora_api.investigations.routes import router as investigations_router
 
@@ -72,6 +75,11 @@ def create_app(
     app.state.settings = s
     app.state.user_repo = UserRepository(s.db_path)
     app.state.subject_repo = SQLiteSubjectRepository(s.db_path)
+    # AccessRepository must be constructed after the engine + auth repos
+    # because its FOREIGN KEY constraints reference ``subjects(id)`` and
+    # ``users(id)`` — those tables have to exist when we run the
+    # ``CREATE TABLE`` for ``subject_owners`` / ``subject_shares``.
+    app.state.access_repo = AccessRepository(s.db_path)
     app.state.orchestrator_factory = orchestrator_factory or _default_orchestrator_factory
 
     if s.cors_origins:
@@ -84,7 +92,9 @@ def create_app(
         )
 
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(auth_users_router, prefix="/api/v1")
     app.include_router(investigations_router, prefix="/api/v1")
+    app.include_router(sharing_router, prefix="/api/v1")
 
     # Mount captured screenshots so the frontend can render them inline. The
     # directory is created lazily — the app must not crash if screenshots are
