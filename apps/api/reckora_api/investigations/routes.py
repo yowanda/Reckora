@@ -101,9 +101,7 @@ async def create_investigation(
     screenshotter: Screenshotter | None = (
         _build_screenshotter(api_settings) if payload.screenshot else None
     )
-    extra_collectors: list[Collector] = (
-        [_build_breach_collector()] if payload.breach else []
-    )
+    extra_collectors: list[Collector] = [_build_breach_collector()] if payload.breach else []
     try:
         subject, traces, edges = await orchestrator.investigate(
             seed,
