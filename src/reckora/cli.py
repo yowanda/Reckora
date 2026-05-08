@@ -10,6 +10,7 @@ from typing import Annotated
 import typer
 
 from . import __version__
+from .collectors.avatar import AvatarCollector
 from .collectors.breach import BreachCollector
 from .collectors.github_api import GitHubCollector
 from .collectors.phone import PhoneCollector
@@ -58,6 +59,7 @@ def _build_orchestrator(*, breach_enabled: bool = False) -> Orchestrator:
         PhoneCollector(),
         BitcoinChainCollector(),
         EthereumChainCollector(api_key=settings.etherscan_api_key),
+        AvatarCollector(),
     ]
     if breach_enabled:
         # Feature-flagged opt-in: only added when --breach is set so that

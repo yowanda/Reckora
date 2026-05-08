@@ -6,6 +6,7 @@ Collectors must be stateless and side-effect-free aside from outbound HTTP.
 
 from __future__ import annotations
 
+from .avatar import AvatarCollector
 from .base import Collector
 from .github_api import GitHubCollector
 from .phone import PhoneCollector
@@ -15,6 +16,7 @@ from .web_profile import WebProfileCollector
 from .whois_rdap import WhoisRdapCollector
 
 __all__ = [
+    "AvatarCollector",
     "BitcoinChainCollector",
     "Collector",
     "EthereumChainCollector",
