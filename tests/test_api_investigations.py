@@ -47,6 +47,68 @@ def test_create_investigation_with_extras(authed_client: TestClient) -> None:
     assert {"alice", "al1ce"}.issubset(values)
 
 
+def test_create_investigation_with_breach_flag(authed_client: TestClient) -> None:
+    """``breach: true`` plumbs an extra HIBP collector into ``investigate``.
+
+    We swap :func:`reckora_api.investigations.routes._build_breach_collector`
+    for a fake so the test doesn't need a live HIBP key or network access.
+    The fake emits a deterministic Trace whose presence we assert on.
+    """
+    from datetime import UTC, datetime
+
+    from reckora.collectors.base import Collector
+    from reckora.evidence.chain import make_evidence
+    from reckora.models.entity import Identifier, Trace
+    from reckora.models.enums import IdentifierType, TraceSource
+
+    class _FakeBreachCollector(Collector):
+        name = "fake_breach"
+        supported = frozenset({IdentifierType.EMAIL.value})
+
+        async def collect(self, identifier: Identifier) -> list[Trace]:
+            evidence = make_evidence(
+                "https://haveibeenpwned.test/api/v3/breachedaccount/x",
+                {"breaches": []},
+                keep_raw=False,
+                fetched_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+            return [
+                Trace(
+                    identifier=identifier,
+                    source=TraceSource.BREACH_HIBP,
+                    fields={
+                        "email": identifier.value,
+                        "breach_count": 1,
+                        "first_breach_date": "2013-10-04",
+                        "latest_breach_date": "2013-10-04",
+                        "data_classes": ["Email addresses"],
+                        "has_sensitive_breach": False,
+                        "breaches": [
+                            {"name": "Adobe", "breach_date": "2013-10-04"},
+                        ],
+                    },
+                    evidence=evidence,
+                )
+            ]
+
+    with patch(
+        "reckora_api.investigations.routes._build_breach_collector",
+        return_value=_FakeBreachCollector(),
+    ):
+        response = authed_client.post(
+            "/api/v1/investigations",
+            json={
+                "seed": {"kind": "email", "value": "alice@example.com"},
+                "breach": True,
+            },
+        )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    breach_traces = [t for t in body["traces"] if t["source"] == "breach_hibp"]
+    assert len(breach_traces) == 1
+    assert breach_traces[0]["fields"]["breach_count"] == 1
+
+
 def test_create_investigation_with_screenshot_flag(authed_client: TestClient) -> None:
     """`screenshot: true` swaps the orchestrator's screenshotter for a fake.
 

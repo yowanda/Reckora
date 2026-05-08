@@ -37,10 +37,16 @@ class Orchestrator:
         seed: Identifier,
         *,
         extra_identifiers: list[Identifier] | None = None,
+        extra_collectors: Iterable[Collector] | None = None,
         archiver: Archiver | None = None,
         screenshotter: Screenshotter | None = None,
     ) -> tuple[Subject, list[Trace], list[Edge]]:
         """Collect Traces for `seed` (+ optional extras) and correlate them.
+
+        ``extra_collectors`` is appended to the orchestrator's permanent
+        collector list for the duration of this single call. Used by feature-
+        flagged collectors (e.g. the HIBP breach lookup) that should only run
+        when the caller explicitly opts in via ``--breach`` / ``breach: true``.
 
         When ``archiver`` is provided, every unique source URL across the
         collected traces is archived (best-effort) and the resulting snapshot
@@ -51,10 +57,11 @@ class Orchestrator:
         each trace's :class:`Evidence.screenshot_path`.
         """
         identifiers: list[Identifier] = [seed, *(extra_identifiers or [])]
+        collectors: list[Collector] = [*self._collectors, *(extra_collectors or [])]
 
         traces: list[Trace] = []
         for ident in identifiers:
-            for collector in self._collectors:
+            for collector in collectors:
                 if not collector.supports(ident):
                     continue
                 try:

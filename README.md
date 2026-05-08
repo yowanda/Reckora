@@ -91,6 +91,33 @@ link next to the live source URL.
 Set `OPENAI_API_KEY` to enable `--ai` (LLM-generated summary + hypotheses,
 evidence-bounded with `ev:<8-hex>` citations).
 
+## Breach lookup (Have I Been Pwned)
+
+Reckora ships an opt-in `BreachCollector` that resolves an `email`
+identifier against the [Have I Been Pwned v3 API](https://haveibeenpwned.com/API/v3).
+It is **off by default** (no network calls, no PII leaving the host)
+and only fires when you both pass `--breach` AND set `HIBP_API_KEY` —
+either of those missing degrades silently to an empty trace list so
+investigations stay deterministic on hosts without a key.
+
+```bash
+export HIBP_API_KEY="hibp_..."
+reckora investigate alice@example.com --kind email --breach
+```
+
+The emitted trace normalises to a flat schema the dossier renderers can
+read without parsing nested arrays at render time:
+`email`, `breach_count`, `first_breach_date`, `latest_breach_date`,
+`data_classes` (sorted union across all breaches), `has_sensitive_breach`,
+and `breaches[]` (per-breach summary with `name`, `domain`, `breach_date`,
+`pwn_count`, `data_classes`, `is_verified`, `is_sensitive`, ...).
+
+The raw HIBP response is **never** inlined into the evidence row
+(`keep_raw=False`) — only the SHA-256 of the canonicalised payload is
+preserved, so the chain stays auditable without spilling per-breach PII
+into the saved dossier. The HTTP API exposes the same toggle via the
+`breach: true` field on `POST /api/v1/investigations`.
+
 ## Phone identifiers
 
 Phone numbers are first-class identifiers. The bundled `PhoneCollector` is
@@ -193,7 +220,7 @@ except `/auth/register` and `/auth/token`):
 | POST | `/auth/register` | create a user (username + password ≥ 8 chars) |
 | POST | `/auth/token` | OAuth2-form login → JWT access token |
 | GET  | `/auth/me` | current user identity |
-| POST | `/investigations` | run orchestrator + persist (`archive`, `screenshot`, `ai` flags) |
+| POST | `/investigations` | run orchestrator + persist (`archive`, `screenshot`, `ai`, `breach` flags) |
 | GET  | `/subjects` | list saved dossiers (`?limit=`) |
 | GET  | `/subjects/{id}` | full saved dossier as JSON |
 | GET  | `/subjects/{id}/dossier?format=html\|json\|md\|pdf` | render dossier |
@@ -211,6 +238,7 @@ Configuration (env vars, all optional except the secret):
 | `RECKORA_DB_PATH` | `./reckora.db` | shared SQLite file (CLI + API) |
 | `RECKORA_API_SCREENSHOTS_DIR` | `screenshots` | filesystem dir for captured PNGs |
 | `RECKORA_API_SCREENSHOTS_URL_PREFIX` | `/screenshots` | URL prefix at which the API serves PNGs |
+| `HIBP_API_KEY` | _(unset)_ | Have I Been Pwned API key (enables `--breach` / `breach: true`) |
 
 ## Roadmap
 

@@ -7,6 +7,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
+from reckora.collectors.base import Collector
+from reckora.collectors.breach import BreachCollector
 from reckora.config import settings as engine_settings
 from reckora.evidence.archive import Archiver, WaybackArchiver
 from reckora.evidence.screenshot import Screenshotter
@@ -44,6 +46,16 @@ def _build_screenshotter(settings: APISettings) -> Screenshotter:
         output_dir=settings.screenshots_dir,
         path_prefix=settings.screenshots_url_prefix,
     )
+
+
+def _build_breach_collector() -> Collector:
+    """Construct the HIBP breach collector for a single request.
+
+    Pulled out as a module-level helper (mirroring ``_build_screenshotter``)
+    so tests can monkeypatch it and inject a deterministic fake without
+    going to the network or needing a real HIBP key.
+    """
+    return BreachCollector(api_key=engine_settings.hibp_api_key)
 
 
 router = APIRouter(tags=["investigations"])
@@ -89,10 +101,12 @@ async def create_investigation(
     screenshotter: Screenshotter | None = (
         _build_screenshotter(api_settings) if payload.screenshot else None
     )
+    extra_collectors: list[Collector] = [_build_breach_collector()] if payload.breach else []
     try:
         subject, traces, edges = await orchestrator.investigate(
             seed,
             extra_identifiers=extras,
+            extra_collectors=extra_collectors,
             archiver=archiver,
             screenshotter=screenshotter,
         )
