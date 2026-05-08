@@ -8,8 +8,23 @@ and is never serialised to clients.
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class Role(StrEnum):
+    """Coarse-grained authorisation role attached to every user.
+
+    ``viewer`` is the default for self-service registrations: users see only
+    the dossiers they own (or that have been explicitly shared with them) and
+    cannot manage other users. ``admin`` is reserved for operators bootstrapped
+    via the ``reckora-api`` CLI; admins can list / fetch / delete any saved
+    dossier and promote / demote other users.
+    """
+
+    ADMIN = "admin"
+    VIEWER = "viewer"
 
 
 class UserCreate(BaseModel):
@@ -29,6 +44,7 @@ class UserPublic(BaseModel):
     id: int
     username: str
     created_at: datetime
+    role: Role
 
 
 class TokenResponse(BaseModel):
@@ -41,6 +57,14 @@ class TokenResponse(BaseModel):
     expires_in: int
 
 
+class RoleUpdate(BaseModel):
+    """Body for ``PATCH /api/v1/users/{user_id}/role`` (admin only)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: Role
+
+
 class UserRecord(BaseModel):
     """Internal user row; never returned to clients."""
 
@@ -51,3 +75,4 @@ class UserRecord(BaseModel):
     password_hash: str
     created_at: datetime
     is_active: bool
+    role: Role

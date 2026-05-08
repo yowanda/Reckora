@@ -475,11 +475,14 @@ Reckora ships a FastAPI backend (`apps/api/reckora_api`) that wraps the same
 engine the CLI uses. The web frontend (Vite + React + TS, see
 [ROADMAP](./ROADMAP.md)) consumes this API as its sole backend.
 
-Generate a JWT secret and bootstrap the first user:
+Generate a JWT secret and bootstrap the first **admin** (the CLI defaults to
+`--admin` so the operator-bootstrap flow keeps working; pass `--viewer` to
+create a non-privileged user instead):
 
 ```bash
 export RECKORA_API_JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-reckora-api create-user alice --password 'supersecret123'
+reckora-api create-user root --password 'supersecret123'           # admin
+reckora-api create-user alice --password 'alicepassword1' --viewer  # viewer
 reckora-api serve --host 127.0.0.1 --port 8000
 ```
 

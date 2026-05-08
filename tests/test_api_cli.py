@@ -41,6 +41,8 @@ def test_create_user_inserts_into_store(
     )
     assert result.exit_code == 0, result.stdout
     assert "created user alice" in result.stdout
+    # CLI default is --admin so the operator-bootstrap flow keeps working.
+    assert "role=admin" in result.stdout
 
     # Same name a second time should be rejected (uniqueness).
     second = runner.invoke(
@@ -48,6 +50,18 @@ def test_create_user_inserts_into_store(
         ["create-user", "alice", "--password", "supersecret123"],
     )
     assert second.exit_code != 0
+
+
+def test_create_user_viewer_flag_creates_viewer(
+    runner: CliRunner,
+    env: dict[str, str],
+) -> None:
+    result = runner.invoke(
+        app,
+        ["create-user", "alice", "--password", "supersecret123", "--viewer"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert "role=viewer" in result.stdout
 
 
 def test_create_user_rejects_short_password(

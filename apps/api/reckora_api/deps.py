@@ -15,7 +15,8 @@ from fastapi.security import OAuth2PasswordBearer
 
 from reckora.orchestrator import Orchestrator
 from reckora.persistence.repository import SubjectRepository
-from reckora_api.auth.models import UserRecord
+from reckora_api.access.repository import AccessRepository
+from reckora_api.auth.models import Role, UserRecord
 from reckora_api.auth.repository import UserRepository
 from reckora_api.auth.tokens import decode_token
 from reckora_api.config import APISettings
@@ -35,6 +36,11 @@ def get_user_repo(request: Request) -> UserRepository:
 
 def get_subject_repo(request: Request) -> SubjectRepository:
     repo: SubjectRepository = request.app.state.subject_repo
+    return repo
+
+
+def get_access_repo(request: Request) -> AccessRepository:
+    repo: AccessRepository = request.app.state.access_repo
     return repo
 
 
@@ -80,5 +86,20 @@ def current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid token",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+
+def require_admin(user: Annotated[UserRecord, Depends(current_user)]) -> UserRecord:
+    """Authorise admin-only routes.
+
+    Returns the user record on success so the route handler can read the
+    actor (e.g. self-demotion guards). Returns 403 — not 404 — because the
+    target endpoint exists; the caller simply lacks the role.
+    """
+    if user.role is not Role.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="admin role required",
         )
     return user
