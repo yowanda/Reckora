@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from reckora.collectors.avatar import AvatarCollector
 from reckora.collectors.github_api import GitHubCollector
+from reckora.collectors.gravatar import GravatarCollector
 from reckora.collectors.hackernews import HackerNewsCollector
 from reckora.collectors.keybase import KeybaseCollector
 from reckora.collectors.phone import PhoneCollector
@@ -42,6 +43,7 @@ def _default_orchestrator_factory() -> Orchestrator:
             GitHubCollector(token=engine_settings.github_token),
             HackerNewsCollector(),
             KeybaseCollector(),
+            GravatarCollector(),
             WhoisRdapCollector(),
             WebProfileCollector(),
             PhoneCollector(),
