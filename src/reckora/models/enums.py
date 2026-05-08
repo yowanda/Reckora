@@ -30,6 +30,7 @@ class TraceSource(StrEnum):
     PHONE_LIBPHONENUMBER = "phone_libphonenumber"
     BREACH_HIBP = "breach_hibp"
     WALLET_BLOCKSTREAM = "wallet_blockstream"
+    WALLET_ETHERSCAN = "wallet_etherscan"
     USER_PROVIDED = "user_provided"
 
 
