@@ -31,6 +31,11 @@ dependencies = [
     "pillow>=10.0",
     "jinja2>=3.1",
     "python-dotenv>=1.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
+    "pyjwt>=2.8",
+    "bcrypt>=4.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -48,22 +53,23 @@ dev = [
 
 [project.scripts]
 reckora = "reckora.cli:app"
+reckora-api = "reckora_api.cli:app"
 
 [project.urls]
 Homepage = "https://github.com/yowanda/Reckora"
 Issues = "https://github.com/yowanda/Reckora/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/reckora"]
+packages = ["src/reckora", "apps/api/reckora_api"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/reckora", "README.md", "LICENSE", "pyproject.toml"]
+include = ["src/reckora", "apps/api/reckora_api", "README.md", "LICENSE", "pyproject.toml"]
 
 # ------------------------------------------------------------------ ruff
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["src", "tests"]
+src = ["src", "apps/api", "tests"]
 
 [tool.ruff.lint]
 select = [
@@ -100,10 +106,15 @@ python_version = "3.11"
 strict = true
 warn_unused_configs = true
 ignore_missing_imports = false
-files = ["src/reckora", "tests"]
+files = ["src/reckora", "apps/api/reckora_api", "tests"]
+mypy_path = "src:apps/api"
 
 [[tool.mypy.overrides]]
 module = ["imagehash"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["jwt", "jwt.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -119,6 +130,7 @@ addopts = [
     "--strict-config",
     "--strict-markers",
     "--cov=reckora",
+    "--cov=reckora_api",
     "--cov-report=term-missing:skip-covered",
 ]
 testpaths = ["tests"]
@@ -130,7 +142,7 @@ filterwarnings = [
 
 [tool.coverage.run]
 branch = true
-source = ["reckora"]
+source = ["reckora", "reckora_api"]
 
 [tool.coverage.report]
 exclude_lines = [

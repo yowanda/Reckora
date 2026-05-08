@@ -13,15 +13,38 @@ The 10 layers of the Reckora vision and where each one lives in the codebase.
 | 7 | Evidence Chain | partial | Source URL + timestamp + SHA-256 of canonicalised payload, plus optional Wayback Machine `archive_url` per trace via `reckora investigate --archive`. Screenshot capture — Phase 2. |
 | 8 | Graph | done (in-process) | NetworkX `MultiDiGraph[str]`. Neo4j adapter — Phase 2. |
 | 9 | Reporting | partial | JSON + Markdown + self-contained HTML dossier, persisted to SQLite via `reckora list` / `reckora show`. PDF dossier and timeline reconstruction — Phase 2. |
-| 10 | Web UI | not yet | CLI only. Dashboard / graph viewer / report viewer — Phase 2. |
+| 10 | Web UI | partial | FastAPI backend with JWT auth at `/api/v1/*` (`apps/api/reckora_api`, `reckora-api serve`) — landed. Dashboard / graph viewer / report viewer (`apps/web/`, Vite + React + TS, stack confirmed when work starts) — pending user instruction. |
 
 ## Phase plan
 
 - **Phase 1 — MVP skeleton**: entity-first data model, evidence chain, three collectors, rule-based correlation engine, evidence-bounded AI reasoning, CLI dossier, CI matrix on Python 3.11 + 3.12.
-- **Phase 2 — Persistence & UI**: SQLite storage behind a repository seam (`reckora.persistence.SubjectRepository`, `reckora investigate --save`, `reckora list / show / delete`) — landed; self-contained HTML dossier (`--format html`, `.html` output) — landed; archive.org / Wayback snapshot per evidence URL (`reckora investigate --archive`, `Evidence.archive_url`) — landed; forensic screenshot capture, PDF dossier, web UI with graph viewer, optional Neo4j adapter — pending.
+- **Phase 2 — Persistence & UI**: SQLite storage behind a repository seam (`reckora.persistence.SubjectRepository`, `reckora investigate --save`, `reckora list / show / delete`) — landed; self-contained HTML dossier (`--format html`, `.html` output) — landed; archive.org / Wayback snapshot per evidence URL (`reckora investigate --archive`, `Evidence.archive_url`) — landed; **FastAPI backend with JWT auth** (`apps/api/reckora_api`, `reckora-api serve`) — landed; forensic screenshot capture, PDF dossier, **web frontend** (`apps/web/`, Vite + React + TS, graph viewer) — pending user instruction; optional Neo4j adapter — pending.
 - **Phase 3 — Sensor expansion**: phone collector, crypto wallet collector (Etherscan / Blockstream), `sentence-transformers` bio embeddings, anomaly detector, breach lookup behind a feature flag.
 - **Phase 4 — Autonomous agents**: hypothesis-driven recursive identifier expansion gated by confidence floors, AI-proposed collector plans verified by rule-based engines.
 - **Phase 5 — Collaborative platform**: multi-user investigations, shared evidence library, role-based reporting.
+
+## Frontend / backend split
+
+Layout (the source of truth — agreed with the user):
+
+```
+Reckora/
+├── src/reckora/        # engine — collectors, correlation, persistence, reports, CLI
+└── apps/
+    ├── api/reckora_api/   # FastAPI backend (Phase 2, landed)
+    └── web/               # Vite + React + TS frontend (Phase 2, pending user instruction)
+```
+
+Backend is a thin FastAPI shell on top of the engine (`Orchestrator` +
+`SubjectRepository` + `reckora.reports`) — same wheel, two top-level
+packages (`reckora`, `reckora_api`). Run it with `reckora-api serve`; OpenAPI
+is at `/openapi.json` and Swagger UI at `/docs`. Auth model is JWT bearer
+(login user) issued by `POST /api/v1/auth/token`.
+
+The frontend will live at `apps/web/` as a Vite + React + TypeScript SPA
+when the user gives the go-ahead, and will consume the published OpenAPI
+schema for fully typed client generation. Stack is locked in here so it is
+not re-litigated when frontend work begins.
 
 ## Strategic posture
 

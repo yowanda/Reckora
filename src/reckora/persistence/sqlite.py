@@ -81,7 +81,11 @@ class SQLiteSubjectRepository:
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path)
+        # ``check_same_thread=False`` lets the FastAPI worker pool reuse the
+        # connection across threads. The repo serialises every write through
+        # ``_tx`` and the read paths use ``fetchall()`` with no cursor reuse,
+        # so the relaxation is safe under typical low-concurrency loads.
+        self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.execute("PRAGMA foreign_keys = ON;")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
