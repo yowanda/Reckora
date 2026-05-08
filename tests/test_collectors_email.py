@@ -10,8 +10,9 @@ actually depend on.
 from __future__ import annotations
 
 import hashlib
-from typing import Any
+from typing import Any, cast
 
+import dns.asyncresolver
 import dns.exception
 import dns.resolver
 import httpx
@@ -73,6 +74,23 @@ class _StubResolver:
         return self._answers[(qname, rdtype)]
 
 
+def _stub(
+    answers: dict[tuple[str, str], list[_StubMxRdata]] | None = None,
+    *,
+    raises: Exception | None = None,
+) -> dns.asyncresolver.Resolver:
+    """Build a stub resolver and cast it to the type ``EmailCollector`` expects.
+
+    The stub only implements the one ``resolve()`` coroutine the collector
+    actually calls; ``cast`` keeps mypy happy without forcing the stub to
+    re-implement the full :class:`dns.asyncresolver.Resolver` API surface.
+    """
+    return cast(
+        "dns.asyncresolver.Resolver",
+        _StubResolver(answers or {}, raises=raises),
+    )
+
+
 # --- supports() ------------------------------------------------------------
 
 
@@ -123,7 +141,7 @@ def test_validate_syntax_rejects_garbage(email: str) -> None:
 async def test_collect_invalid_syntax_emits_terse_trace_no_network() -> None:
     """Garbage seed: emit a syntax_invalid trace, do NOT touch the network."""
     ident = Identifier(type=IdentifierType.EMAIL, value="not-an-email")
-    collector = EmailCollector(resolver=_StubResolver({}))
+    collector = EmailCollector(resolver=_stub())
     traces = await collector.collect(ident)
 
     assert len(traces) == 1
@@ -158,7 +176,7 @@ async def test_collect_full_profile(httpx_mock: HTTPXMock, email_alice: Identifi
             ]
         },
     )
-    resolver = _StubResolver(
+    resolver = _stub(
         {
             ("example.com", "MX"): [
                 _StubMxRdata("mx1.example.com."),
@@ -194,7 +212,7 @@ async def test_collect_full_profile(httpx_mock: HTTPXMock, email_alice: Identifi
 async def test_collect_no_mx_records(httpx_mock: HTTPXMock, email_alice: Identifier) -> None:
     """Domain has no MX → mx_resolved=False, mx_hosts=[]."""
     httpx_mock.add_response(url=_gravatar_url("alice@example.com"), status_code=404)
-    resolver = _StubResolver({}, raises=dns.resolver.NoAnswer())
+    resolver = _stub(raises=dns.resolver.NoAnswer())  # type: ignore[no-untyped-call]
     async with httpx.AsyncClient() as client:
         collector = EmailCollector(client=client, resolver=resolver)
         traces = await collector.collect(email_alice)
@@ -210,7 +228,7 @@ async def test_collect_mx_nxdomain_treated_as_no_records(
     """NXDOMAIN on the email domain: signal is "domain doesn't exist" but
     we still emit a clean trace so the dossier can render the finding."""
     httpx_mock.add_response(url=_gravatar_url("alice@example.com"), status_code=404)
-    resolver = _StubResolver({}, raises=dns.resolver.NXDOMAIN())
+    resolver = _stub(raises=dns.resolver.NXDOMAIN())  # type: ignore[no-untyped-call]
     async with httpx.AsyncClient() as client:
         collector = EmailCollector(client=client, resolver=resolver)
         traces = await collector.collect(email_alice)
@@ -224,7 +242,7 @@ async def test_collect_mx_timeout_treated_as_no_records(
 ) -> None:
     """A flaky resolver MUST NOT take down the collector."""
     httpx_mock.add_response(url=_gravatar_url("alice@example.com"), status_code=404)
-    resolver = _StubResolver({}, raises=dns.exception.Timeout())
+    resolver = _stub(raises=dns.exception.Timeout())  # type: ignore[no-untyped-call]
     async with httpx.AsyncClient() as client:
         collector = EmailCollector(client=client, resolver=resolver)
         traces = await collector.collect(email_alice)
@@ -235,7 +253,7 @@ async def test_collect_mx_timeout_treated_as_no_records(
 async def test_collect_mx_dedupes_and_sorts(httpx_mock: HTTPXMock, email_alice: Identifier) -> None:
     """Reddit ships duplicate MX entries on some domains; we de-dupe."""
     httpx_mock.add_response(url=_gravatar_url("alice@example.com"), status_code=404)
-    resolver = _StubResolver(
+    resolver = _stub(
         {
             ("example.com", "MX"): [
                 _StubMxRdata("Z.example.com."),
@@ -258,7 +276,7 @@ async def test_collect_gravatar_404_no_profile(
     httpx_mock: HTTPXMock, email_alice: Identifier
 ) -> None:
     httpx_mock.add_response(url=_gravatar_url("alice@example.com"), status_code=404)
-    resolver = _StubResolver({("example.com", "MX"): [_StubMxRdata("mx.x.")]})
+    resolver = _stub({("example.com", "MX"): [_StubMxRdata("mx.x.")]})
     async with httpx.AsyncClient() as client:
         collector = EmailCollector(client=client, resolver=resolver)
         traces = await collector.collect(email_alice)
@@ -281,7 +299,7 @@ async def test_collect_gravatar_non_json_body_treated_as_no_profile(
         content=b"<html>404</html>",
         headers={"Content-Type": "text/html"},
     )
-    resolver = _StubResolver({("example.com", "MX"): [_StubMxRdata("mx.x.")]})
+    resolver = _stub({("example.com", "MX"): [_StubMxRdata("mx.x.")]})
     async with httpx.AsyncClient() as client:
         collector = EmailCollector(client=client, resolver=resolver)
         traces = await collector.collect(email_alice)
@@ -297,7 +315,7 @@ async def test_collect_gravatar_unexpected_shape_treated_as_no_profile(
         url=_gravatar_url("alice@example.com"),
         json={"entry": []},
     )
-    resolver = _StubResolver({("example.com", "MX"): [_StubMxRdata("mx.x.")]})
+    resolver = _stub({("example.com", "MX"): [_StubMxRdata("mx.x.")]})
     async with httpx.AsyncClient() as client:
         collector = EmailCollector(client=client, resolver=resolver)
         traces = await collector.collect(email_alice)
@@ -310,7 +328,7 @@ async def test_collect_gravatar_500_propagates(
 ) -> None:
     """Transport errors must NOT be silently swallowed."""
     httpx_mock.add_response(url=_gravatar_url("alice@example.com"), status_code=500)
-    resolver = _StubResolver({("example.com", "MX"): [_StubMxRdata("mx.x.")]})
+    resolver = _stub({("example.com", "MX"): [_StubMxRdata("mx.x.")]})
     async with httpx.AsyncClient() as client:
         collector = EmailCollector(client=client, resolver=resolver)
         with pytest.raises(httpx.HTTPStatusError):
@@ -326,7 +344,7 @@ async def test_collect_canonicalises_email_to_lowercase(
     """Mixed-case input MUST hit the lowercase Gravatar URL."""
     ident = Identifier(type=IdentifierType.EMAIL, value="Alice@Example.com")
     httpx_mock.add_response(url=_gravatar_url("alice@example.com"), status_code=404)
-    resolver = _StubResolver({}, raises=dns.resolver.NoAnswer())
+    resolver = _stub(raises=dns.resolver.NoAnswer())  # type: ignore[no-untyped-call]
     async with httpx.AsyncClient() as client:
         collector = EmailCollector(client=client, resolver=resolver)
         traces = await collector.collect(ident)
@@ -338,7 +356,7 @@ async def test_collect_sends_required_gravatar_headers(
     httpx_mock: HTTPXMock, email_alice: Identifier
 ) -> None:
     httpx_mock.add_response(url=_gravatar_url("alice@example.com"), status_code=404)
-    resolver = _StubResolver({}, raises=dns.resolver.NoAnswer())
+    resolver = _stub(raises=dns.resolver.NoAnswer())  # type: ignore[no-untyped-call]
     async with httpx.AsyncClient() as client:
         collector = EmailCollector(client=client, resolver=resolver)
         await collector.collect(email_alice)
@@ -364,7 +382,7 @@ async def test_collect_evidence_drops_raw_gravatar_payload(
         ]
     }
     httpx_mock.add_response(url=_gravatar_url("alice@example.com"), json=payload)
-    resolver = _StubResolver({("example.com", "MX"): [_StubMxRdata("mx.x.")]})
+    resolver = _stub({("example.com", "MX"): [_StubMxRdata("mx.x.")]})
     async with httpx.AsyncClient() as client:
         collector = EmailCollector(client=client, resolver=resolver)
         traces = await collector.collect(email_alice)
