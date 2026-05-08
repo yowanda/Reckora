@@ -125,6 +125,50 @@ preserved, so the chain stays auditable without spilling per-breach PII
 into the saved dossier. The HTTP API exposes the same toggle via the
 `breach: true` field on `POST /api/v1/investigations`.
 
+## Bitcoin wallet identifiers
+
+Reckora ships a `BitcoinChainCollector` that resolves a `wallet` identifier
+against the public [Blockstream Esplora API](https://github.com/Blockstream/esplora/blob/master/API.md)
+— no API key, no registration, just an HTTP gateway in front of an
+Esplora-indexed Bitcoin node. The collector is wired into the default
+orchestrator (CLI and HTTP API), so any seed of `--kind wallet` that
+parses as a Bitcoin mainnet address triggers it automatically.
+
+```bash
+# Legacy (P2PKH)
+reckora investigate "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa" --kind wallet
+
+# SegWit (P2WPKH / P2WSH)
+reckora investigate "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4" --kind wallet
+
+# Taproot (P2TR)
+reckora investigate "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr" --kind wallet
+```
+
+The emitted trace normalises to a flat schema the dossier renderers can
+read without parsing the raw envelope at render time:
+`address`, `chain` (`"bitcoin"`), `network` (`"mainnet"`), `address_format`
+(`p2pkh` / `p2sh` / `bech32` / `bech32m`), `confirmed_tx_count`,
+`mempool_tx_count`, `tx_count`, `total_received_satoshi`,
+`total_spent_satoshi`, `current_balance_satoshi`, `current_balance_btc`
+(string-formatted, no float drift), `mempool_balance_satoshi`,
+`is_active`. A 404 from Blockstream — i.e. the address has never been
+seen on chain — still emits a Trace with `is_active=False`, because the
+absence of activity is itself an intelligence finding rather than a
+collection failure.
+
+The collector silently no-ops on `wallet` strings that are not Bitcoin
+mainnet addresses (e.g. an Ethereum hex address) so future wallet
+adapters that also support `IdentifierType.WALLET` can coexist in the
+orchestrator.
+
+The raw HTTP envelope is **never** inlined into the evidence row
+(`keep_raw=False`) — only the SHA-256 of the canonicalised payload is
+preserved, so the chain stays auditable without bloating the saved
+dossier with on-chain detail. The HTTP API enables the same collector
+automatically — any `POST /api/v1/investigations` with a `wallet`-kind
+seed routes through it.
+
 ## Phone identifiers
 
 Phone numbers are first-class identifiers. The bundled `PhoneCollector` is
