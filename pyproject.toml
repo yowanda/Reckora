@@ -37,6 +37,7 @@ dependencies = [
     "bcrypt>=4.0",
     "python-multipart>=0.0.9",
     "reportlab>=4.0",
+    "phonenumbers>=8.13",
 ]
 
 [project.optional-dependencies]
@@ -135,6 +136,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["playwright", "playwright.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["phonenumbers", "phonenumbers.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

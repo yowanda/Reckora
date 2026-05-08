@@ -8,7 +8,14 @@ from __future__ import annotations
 
 from .base import Collector
 from .github_api import GitHubCollector
+from .phone import PhoneCollector
 from .web_profile import WebProfileCollector
 from .whois_rdap import WhoisRdapCollector
 
-__all__ = ["Collector", "GitHubCollector", "WebProfileCollector", "WhoisRdapCollector"]
+__all__ = [
+    "Collector",
+    "GitHubCollector",
+    "PhoneCollector",
+    "WebProfileCollector",
+    "WhoisRdapCollector",
+]
