@@ -25,6 +25,17 @@ class Settings(BaseSettings):
         default="gpt-4o-mini",
         validation_alias="RECKORA_OPENAI_MODEL",
     )
+    # Model used when the reasoning layer is driven by ChatGPT OAuth
+    # (``reckora auth login``) instead of an OpenAI Platform API key.
+    # The ChatGPT Codex backend hosts a different model lineup
+    # (``gpt-5.1-codex-mini`` / ``gpt-5.4`` / ``gpt-5.3-codex`` / …)
+    # than ``api.openai.com``, so we keep this knob distinct from
+    # ``RECKORA_OPENAI_MODEL`` to avoid 4xx-ing requests against the
+    # API-key path with a Codex-only model name.
+    openai_oauth_model: str = Field(
+        default="gpt-5.1-codex-mini",
+        validation_alias="RECKORA_OPENAI_OAUTH_MODEL",
+    )
     github_token: str | None = Field(default=None, validation_alias="GITHUB_TOKEN")
     user_agent: str = Field(
         default="Reckora/0.1",

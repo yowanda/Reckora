@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from . import __version__
+from .auth.login import OAuthLoginError, interactive_login
+from .auth.oauth import OAuthCredentials, refresh_credentials
+from .auth.storage import (
+    DEFAULT_CREDENTIALS_PATH,
+    delete_credentials,
+    load_credentials,
+    save_credentials,
+)
 from .collectors.avatar import AvatarCollector
 from .collectors.breach import BreachCollector
 from .collectors.github_api import GitHubCollector
@@ -38,6 +47,14 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+auth_app = typer.Typer(
+    help=(
+        "Manage ChatGPT OAuth credentials so the reasoning layer can run "
+        "on a ChatGPT Plus / Pro subscription instead of an API key."
+    ),
+    no_args_is_help=True,
+)
+app.add_typer(auth_app, name="auth")
 
 
 def _identifier_from(value: str, kind: str) -> Identifier:
@@ -176,25 +193,41 @@ async def _run(
     summary_md: str | None = None
     hypotheses_md: str | None = None
     if use_ai:
+        # Pre-flight check: if the user asks for ``--ai`` without
+        # *any* credentials configured, fail loudly *before* spending
+        # a network round-trip on the orchestrator's collectors. We
+        # check both env-var-provided API keys and on-disk OAuth
+        # credentials so users on either auth path get the same
+        # ergonomic.
+        if not settings.openai_api_key and load_credentials() is None:
+            raise typer.BadParameter(
+                "--ai requires either OPENAI_API_KEY or a ChatGPT OAuth login. "
+                "Run `reckora auth login` to authenticate with your "
+                "ChatGPT Plus / Pro account, or set OPENAI_API_KEY."
+            )
         client = ReasoningClient(
             api_key=settings.openai_api_key,
             model=settings.openai_model,
+            oauth_model=settings.openai_oauth_model,
         )
-        ident_strs = [str(i) for i in subject.identifiers]
-        summary_md = await summarize(
-            client,
-            seed=str(seed),
-            identifiers=ident_strs,
-            traces=traces,
-            edges=edges,
-        )
-        hypotheses_md = await hypothesize(
-            client,
-            seed=str(seed),
-            identifiers=ident_strs,
-            traces=traces,
-            edges=edges,
-        )
+        try:
+            ident_strs = [str(i) for i in subject.identifiers]
+            summary_md = await summarize(
+                client,
+                seed=str(seed),
+                identifiers=ident_strs,
+                traces=traces,
+                edges=edges,
+            )
+            hypotheses_md = await hypothesize(
+                client,
+                seed=str(seed),
+                identifiers=ident_strs,
+                traces=traces,
+                edges=edges,
+            )
+        finally:
+            await client.aclose()
 
     return subject, traces, edges, summary_md, hypotheses_md
 
@@ -425,6 +458,153 @@ def delete(
 def version() -> None:
     """Print the Reckora version."""
     typer.echo(__version__)
+
+
+# ----------------------------------------------------------------------
+#  reckora auth ...
+# ----------------------------------------------------------------------
+#
+# The auth subcommand surface lets a user log in to a ChatGPT Plus /
+# Pro account so Reckora's reasoning layer can run without an
+# OpenAI Platform API key. Backed by the OAuth helpers in
+# :mod:`reckora.auth`. Each command keeps its side effects scoped to
+# the credentials file (``~/.config/reckora/auth.json`` by default)
+# so a misuse can be undone with a single ``reckora auth logout``.
+
+
+_AUTH_TOS_BANNER = (
+    "Reckora is about to open your default browser at "
+    "auth.openai.com to obtain a ChatGPT OAuth token. The same "
+    "client_id is used by the official OpenAI Codex CLI; usage "
+    "counts against your ChatGPT Plus / Pro plan, not your "
+    "Platform API tier. Press Ctrl+C in the next 5 minutes to "
+    "abort."
+)
+
+
+def _format_credentials_status(creds: OAuthCredentials, *, path: Path) -> str:
+    """Render a human-readable single-line status for a credentials object."""
+    import math
+
+    now = datetime.now(UTC)
+    delta = creds.expires_at - now
+    if delta.total_seconds() <= 0:
+        when = "expired"
+    else:
+        # Round *up* to whole seconds: if a token was minted to expire
+        # in exactly 7200s, the few microseconds of drift between
+        # construction and rendering would otherwise downgrade the
+        # readout to ``1h59m``. ``math.ceil`` keeps the display
+        # truthful — the token really does have at least that much
+        # life left.
+        secs = math.ceil(delta.total_seconds())
+        if secs < 60:
+            when = f"in {secs}s"
+        elif secs < 3600:
+            when = f"in {secs // 60}m"
+        elif secs % 3600 == 0:
+            when = f"in {secs // 3600}h"
+        else:
+            when = f"in {secs // 3600}h{(secs % 3600) // 60}m"
+    return (
+        f"logged in (token expires {when} at "
+        f"{creds.expires_at.isoformat(timespec='seconds')}; "
+        f"credentials at {path})"
+    )
+
+
+@auth_app.command(name="login")
+def auth_login(
+    credentials_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--credentials",
+            help="Override the credentials file path (defaults to ~/.config/reckora/auth.json).",
+        ),
+    ] = None,
+    timeout: Annotated[
+        int,
+        typer.Option(
+            "--timeout",
+            help="Seconds to wait for the browser callback before giving up.",
+        ),
+    ] = 300,
+) -> None:
+    """Open a browser, complete a ChatGPT OAuth flow, and save credentials."""
+    typer.echo(_AUTH_TOS_BANNER)
+    target = credentials_path or DEFAULT_CREDENTIALS_PATH
+    try:
+        creds = asyncio.run(interactive_login(timeout=float(timeout)))
+    except OAuthLoginError as exc:
+        typer.echo(f"login failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    save_credentials(creds, path=target)
+    typer.echo(_format_credentials_status(creds, path=target))
+
+
+@auth_app.command(name="status")
+def auth_status(
+    credentials_path: Annotated[
+        Path | None,
+        typer.Option("--credentials", help="Override the credentials file path."),
+    ] = None,
+) -> None:
+    """Show whether Reckora has a stored ChatGPT OAuth login."""
+    target = credentials_path or DEFAULT_CREDENTIALS_PATH
+    creds = load_credentials(path=target)
+    if creds is None:
+        typer.echo(f"not logged in (no credentials at {target})")
+        raise typer.Exit(code=1)
+    typer.echo(_format_credentials_status(creds, path=target))
+
+
+@auth_app.command(name="logout")
+def auth_logout(
+    credentials_path: Annotated[
+        Path | None,
+        typer.Option("--credentials", help="Override the credentials file path."),
+    ] = None,
+) -> None:
+    """Forget the stored ChatGPT OAuth credentials."""
+    target = credentials_path or DEFAULT_CREDENTIALS_PATH
+    if delete_credentials(path=target):
+        typer.echo(f"logged out (removed {target})")
+    else:
+        typer.echo("already logged out")
+
+
+@auth_app.command(name="refresh")
+def auth_refresh(
+    credentials_path: Annotated[
+        Path | None,
+        typer.Option("--credentials", help="Override the credentials file path."),
+    ] = None,
+) -> None:
+    """Force a refresh of the access token using the stored refresh token."""
+    target = credentials_path or DEFAULT_CREDENTIALS_PATH
+    creds = load_credentials(path=target)
+    if creds is None:
+        typer.echo(f"not logged in (no credentials at {target})", err=True)
+        raise typer.Exit(code=1)
+
+    async def _refresh() -> OAuthCredentials:
+        # Local import keeps httpx out of `reckora` import path on
+        # ``--help`` / ``version`` invocations.
+        import httpx
+
+        async with httpx.AsyncClient() as http:
+            return await refresh_credentials(creds.refresh_token, client=http)
+
+    try:
+        refreshed = asyncio.run(_refresh())
+    except Exception as exc:
+        # Surface the upstream error verbatim — typically an
+        # ``HTTPStatusError`` or ``invalid_grant`` from the token
+        # endpoint, both of which carry useful diagnostic detail.
+        typer.echo(f"refresh failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    save_credentials(refreshed, path=target)
+    typer.echo(_format_credentials_status(refreshed, path=target))
 
 
 if __name__ == "__main__":

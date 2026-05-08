@@ -96,7 +96,35 @@ all four dossier renderers (markdown, JSON, HTML, PDF) include the path /
 link next to the live source URL.
 
 Set `OPENAI_API_KEY` to enable `--ai` (LLM-generated summary + hypotheses,
-evidence-bounded with `ev:<8-hex>` citations).
+evidence-bounded with `ev:<8-hex>` citations). Alternatively, log in with
+your ChatGPT Plus / Pro account so the reasoning layer runs against your
+subscription instead of an OpenAI Platform billing tier:
+
+```bash
+reckora auth login    # opens auth.openai.com; redirects to localhost:1455
+reckora auth status   # show current login state
+reckora auth refresh  # rotate access_token using the stored refresh_token
+reckora auth logout   # forget credentials
+```
+
+The flow is the OAuth authorization-code + PKCE dance the official OpenAI
+Codex CLI ships with — Reckora reuses Codex's `client_id`
+(`app_EMoamEEZ73f0CkXaXp7hrann`) and the whitelisted
+`http://localhost:1455/auth/callback` redirect URI. The resulting
+`access_token` is used as a Bearer credential against
+`https://chatgpt.com/backend-api/codex/responses` (the same Responses API
+Codex itself talks to), so the reasoning layer runs on your ChatGPT
+subscription instead of a separate `api.openai.com` billing tier.
+Credentials persist at `~/.config/reckora/auth.json` (mode `0600`,
+`$XDG_CONFIG_HOME` honoured); the access token auto-refreshes both
+proactively (when it's within ~2 minutes of expiry) and on the first
+401 from Codex. If both `OPENAI_API_KEY` and a stored login are
+present, the API key wins so existing deploys keep their previous
+behaviour.
+
+The Codex backend exposes a different model lineup than `api.openai.com`
+(no `gpt-4o-mini`); override the OAuth-mode model with the
+`RECKORA_OPENAI_OAUTH_MODEL` env var (default `gpt-5.1-codex-mini`).
 
 ## Breach lookup (Have I Been Pwned)
 
@@ -374,6 +402,7 @@ Configuration (env vars, all optional except the secret):
 | `RECKORA_API_SCREENSHOTS_URL_PREFIX` | `/screenshots` | URL prefix at which the API serves PNGs |
 | `HIBP_API_KEY` | _(unset)_ | Have I Been Pwned API key (enables `--breach` / `breach: true`) |
 | `ETHERSCAN_API_KEY` | _(unset)_ | Etherscan API key — optional; lifts the anonymous tier's rate limit for the Ethereum wallet collector |
+| `RECKORA_OPENAI_OAUTH_MODEL` | `gpt-5.1-codex-mini` | Model used when the reasoning layer runs on a ChatGPT OAuth login instead of `OPENAI_API_KEY` |
 
 ## Roadmap
 
