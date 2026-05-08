@@ -90,6 +90,19 @@ CREATE TABLE IF NOT EXISTS subject_assignees(
 
 CREATE INDEX IF NOT EXISTS idx_subject_assignees_user
     ON subject_assignees(user_id);
+
+CREATE TABLE IF NOT EXISTS subject_labels(
+    subject_id TEXT NOT NULL
+        REFERENCES subjects(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    created_by INTEGER
+        REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, label)
+);
+
+CREATE INDEX IF NOT EXISTS idx_subject_labels_label
+    ON subject_labels(label);
 """
 
 
@@ -113,6 +126,25 @@ class AssigneeRow:
     user_id: int
     assigned_by: int | None
     assigned_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class LabelRow:
+    """One row in :meth:`AccessRepository.list_labels`.
+
+    ``created_by`` is nullable because the column carries
+    ``ON DELETE SET NULL``: a labeller's account being removed
+    preserves the audit trail of *what* labels exist while collapsing
+    *who* applied them. Labels themselves are normalised to lower-case
+    by the route layer before insert so ``OSINT`` and ``osint`` collapse
+    to a single row — consistent with how most issue trackers handle
+    tags.
+    """
+
+    subject_id: str
+    label: str
+    created_by: int | None
+    created_at: str
 
 
 class AccessRepository:
@@ -390,6 +422,108 @@ class AccessRepository:
         )
         self._conn.commit()
         return cur.rowcount > 0
+
+    # -- labels -----------------------------------------------------------
+
+    def add_label(
+        self,
+        subject_id: str,
+        label: str,
+        *,
+        created_by: int | None,
+        created_at: str,
+    ) -> bool:
+        """Tag ``subject_id`` with ``label``. Idempotent.
+
+        Returns ``True`` if a new row was inserted, ``False`` if the
+        label already existed on the dossier (so the route layer can
+        return 200 vs 201 if it cares — but the API surface uses 200
+        in both cases for ergonomic PUT semantics).
+        """
+        cur = self._conn.execute(
+            """
+            INSERT OR IGNORE INTO subject_labels(
+                subject_id, label, created_by, created_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (subject_id, label, created_by, created_at),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def remove_label(self, subject_id: str, label: str) -> bool:
+        """Detach ``label`` from ``subject_id``. Returns whether a row was removed."""
+        cur = self._conn.execute(
+            "DELETE FROM subject_labels WHERE subject_id = ? AND label = ?",
+            (subject_id, label),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def list_labels(self, subject_id: str) -> list[LabelRow]:
+        """All labels on a dossier, ordered alphabetically.
+
+        Alphabetical (rather than insertion-order) is the convention
+        every other tag-list UI follows — fast scan, no surprise
+        re-flow when somebody re-applies an existing label.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT subject_id, label, created_by, created_at
+            FROM subject_labels
+            WHERE subject_id = ?
+            ORDER BY label ASC
+            """,
+            (subject_id,),
+        ).fetchall()
+        return [
+            LabelRow(
+                subject_id=str(sid),
+                label=str(lab),
+                created_by=None if cb is None else int(cb),
+                created_at=str(ts),
+            )
+            for sid, lab, cb, ts in rows
+        ]
+
+    def list_label_catalog(self, user_id: int, *, is_admin: bool = False) -> list[tuple[str, int]]:
+        """Distinct labels the actor can see, with counts.
+
+        Powers the global "filter by label" UI: only counts dossiers
+        the actor can read (owner / share / assignment), or all
+        dossiers if ``is_admin``. Sorted by descending count then
+        label, so the most-used tags surface first.
+        """
+        if is_admin:
+            rows = self._conn.execute(
+                """
+                SELECT label, COUNT(*) AS n
+                FROM subject_labels
+                GROUP BY label
+                ORDER BY n DESC, label ASC
+                """,
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                SELECT l.label, COUNT(*) AS n
+                FROM subject_labels l
+                WHERE l.subject_id IN (
+                    SELECT subject_id FROM subject_owners
+                        WHERE owner_user_id = :uid
+                    UNION
+                    SELECT subject_id FROM subject_shares
+                        WHERE user_id = :uid
+                    UNION
+                    SELECT subject_id FROM subject_assignees
+                        WHERE user_id = :uid
+                )
+                GROUP BY l.label
+                ORDER BY n DESC, l.label ASC
+                """,
+                {"uid": user_id},
+            ).fetchall()
+        return [(str(lab), int(n)) for lab, n in rows]
 
     # -- visibility helpers ----------------------------------------------
 
