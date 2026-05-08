@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..anomaly import detect_anomalies
 from ..models.entity import Edge, Subject, Trace
 from .timeline import build_timeline
 
@@ -22,6 +23,7 @@ def to_dossier_dict(
         "subject": subject.model_dump(mode="json"),
         "traces": [t.model_dump(mode="json") for t in traces],
         "timeline": [e.model_dump(mode="json") for e in build_timeline(traces)],
+        "anomalies": [a.model_dump(mode="json") for a in detect_anomalies(traces)],
         "edges": [e.model_dump(mode="json") for e in edges],
         "ai": {
             "summary": summary,

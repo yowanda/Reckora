@@ -159,6 +159,7 @@ async def create_investigation(
         subject=payload_dict["subject"],
         traces=payload_dict["traces"],
         timeline=payload_dict["timeline"],
+        anomalies=payload_dict["anomalies"],
         edges=payload_dict["edges"],
         ai=payload_dict["ai"],
     )
@@ -215,6 +216,7 @@ def get_subject(
         subject=payload_dict["subject"],
         traces=payload_dict["traces"],
         timeline=payload_dict["timeline"],
+        anomalies=payload_dict["anomalies"],
         edges=payload_dict["edges"],
         ai=payload_dict["ai"],
     )

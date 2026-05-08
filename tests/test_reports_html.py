@@ -95,6 +95,20 @@ def test_html_timeline_falls_back_to_empty_state() -> None:
     assert html.count('class="empty">no events') == 1
 
 
+def test_html_renders_anomalies_section() -> None:
+    subject, traces, edges = _build_dossier()
+    html = to_dossier_html(subject=subject, traces=traces, edges=edges)
+    assert "<h2>Anomalies</h2>" in html
+    # No anomaly fixtures in this dossier, so we get the empty-state copy.
+    assert "no anomalies detected" in html
+    # Anomalies appears after Traces and before Correlation edges.
+    assert (
+        html.index("<h2>Traces</h2>")
+        < html.index("<h2>Anomalies</h2>")
+        < html.index("<h2>Correlation edges</h2>")
+    )
+
+
 def test_html_renders_archive_url_when_present() -> None:
     subject, traces, edges = _build_dossier()
     snap = "https://web.archive.org/web/2026/https://api.github.com/users/alice"
