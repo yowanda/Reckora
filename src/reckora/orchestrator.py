@@ -19,6 +19,7 @@ from collections.abc import Iterable
 
 from .collectors.base import Collector
 from .correlation.engine import correlate
+from .evidence.archive import Archiver, augment_traces_with_archive
 from .models.entity import Edge, Identifier, Subject, Trace
 
 log = logging.getLogger(__name__)
@@ -35,8 +36,14 @@ class Orchestrator:
         seed: Identifier,
         *,
         extra_identifiers: list[Identifier] | None = None,
+        archiver: Archiver | None = None,
     ) -> tuple[Subject, list[Trace], list[Edge]]:
-        """Collect Traces for `seed` (+ optional extras) and correlate them."""
+        """Collect Traces for `seed` (+ optional extras) and correlate them.
+
+        When ``archiver`` is provided, every unique source URL across the
+        collected traces is archived (best-effort) and the resulting snapshot
+        URL is attached to each trace's :class:`Evidence.archive_url`.
+        """
         identifiers: list[Identifier] = [seed, *(extra_identifiers or [])]
 
         traces: list[Trace] = []
@@ -52,6 +59,9 @@ class Orchestrator:
                         collector.name,
                         ident,
                     )
+
+        if archiver is not None:
+            traces = await augment_traces_with_archive(traces, archiver)
 
         edges = correlate(traces)
         subject = Subject(

@@ -88,6 +88,10 @@ ul.idents li { display: inline-block; margin: .15rem .3rem .15rem 0;
         fetched {{ t.evidence.fetched_at.isoformat() }}</dd>
     <dt>source</dt>
     <dd><a href="{{ t.evidence.source_url }}">{{ t.evidence.source_url }}</a></dd>
+    {% if t.evidence.archive_url %}
+    <dt>archive</dt>
+    <dd><a href="{{ t.evidence.archive_url }}">{{ t.evidence.archive_url }}</a></dd>
+    {% endif %}
     {% for k, v in t.fields.items() if v not in (None, "", []) %}
     <dt>{{ k }}</dt>
     <dd><code>{{ v }}</code></dd>

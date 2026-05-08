@@ -33,6 +33,10 @@ class Evidence(BaseModel):
     `payload_sha256` is the canonical SHA-256 of the source payload. The raw
     payload is kept inline for small responses but may be elided (`None`) when
     a collector returns a large blob. The hash always survives.
+
+    `archive_url` is an optional pointer to an out-of-band durable copy of the
+    source page (e.g. an archive.org Wayback snapshot) so the chain remains
+    auditable even if the live page disappears.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -41,6 +45,7 @@ class Evidence(BaseModel):
     fetched_at: datetime
     payload_sha256: str
     raw_payload: dict[str, Any] | None = None
+    archive_url: str | None = None
 
 
 class Trace(BaseModel):

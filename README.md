@@ -42,6 +42,18 @@ reckora delete subj-...
 The store lives at `./reckora.db` by default; override with `--db PATH` or the
 `RECKORA_DB_PATH` environment variable.
 
+Mint a Wayback Machine snapshot for every evidence URL so the chain stays
+auditable even if the live page disappears (best-effort; off by default
+because each save round-trips to web.archive.org):
+
+```bash
+reckora investigate octocat --kind username --archive
+```
+
+Each `Trace.evidence.archive_url` then points at the durable snapshot, and
+the dossier renderers (markdown, JSON, HTML) include it next to the live
+source URL.
+
 Set `OPENAI_API_KEY` to enable `--ai` (LLM-generated summary + hypotheses,
 evidence-bounded with `ev:<8-hex>` citations).
 
