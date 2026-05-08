@@ -33,8 +33,15 @@ reckora investigate octocat --kind username --format pdf  > dossier.pdf
 The HTML dossier is fully self-contained (inline CSS, no external assets) so it
 opens straight from disk and supports light / dark mode. The PDF dossier is
 generated with reportlab (pure Python, no system libs) and mirrors the same
-structure: header → identifiers → traces → correlation edges → optional AI
-summary / hypotheses, with clickable source / archive links.
+structure: header → identifiers → traces → **timeline** → correlation edges →
+optional AI summary / hypotheses, with clickable source / archive links.
+
+Every dossier (markdown / HTML / PDF) carries a chronological `## Timeline`
+section reconstructed from `Evidence.fetched_at`, sorted ascending with ties
+broken by `payload_sha256` so the order is deterministic. The JSON export
+and `GET /api/v1/subjects/{id}` surface the same data as a top-level
+`timeline[]` array so the frontend can reuse the projection without
+re-deriving it.
 
 Persist a dossier to the SQLite store and reopen it later:
 

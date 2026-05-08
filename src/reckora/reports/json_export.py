@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from ..models.entity import Edge, Subject, Trace
+from .timeline import build_timeline
 
 
 def to_dossier_dict(
@@ -20,6 +21,7 @@ def to_dossier_dict(
     return {
         "subject": subject.model_dump(mode="json"),
         "traces": [t.model_dump(mode="json") for t in traces],
+        "timeline": [e.model_dump(mode="json") for e in build_timeline(traces)],
         "edges": [e.model_dump(mode="json") for e in edges],
         "ai": {
             "summary": summary,

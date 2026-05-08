@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 import jinja2
 
 from ..models.entity import Edge, Subject, Trace
+from .timeline import build_timeline
 
 _TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -60,6 +61,17 @@ ul.idents li { display: inline-block; margin: .15rem .3rem .15rem 0;
 }
 .empty { color: #888; font-style: italic; }
 .ai { white-space: pre-wrap; font-size: .95rem; }
+ol.timeline { list-style: none; padding: 0; margin: 0; border-left: 2px solid #d0d0d0; }
+ol.timeline li { position: relative; padding: .15rem 0 .55rem 1rem;
+                 font-size: .9rem; }
+ol.timeline li::before { content: ""; position: absolute; left: -5px; top: .5rem;
+                         width: 8px; height: 8px; border-radius: 50%;
+                         background: #1f7a4d; }
+ol.timeline time { color: #555; font-variant-numeric: tabular-nums; }
+@media (prefers-color-scheme: dark) {
+  ol.timeline { border-color: #2a2e34; }
+  ol.timeline time { color: #9aa0a6; }
+}
 </style>
 </head>
 <body>
@@ -105,6 +117,25 @@ ul.idents li { display: inline-block; margin: .15rem .3rem .15rem 0;
 {% endfor %}
 {% else %}
 <p class="empty">no traces</p>
+{% endif %}
+
+<h2>Timeline</h2>
+{% if timeline %}
+<ol class="timeline">
+{% for entry in timeline %}
+  <li>
+    <time datetime="{{ entry.timestamp.isoformat() }}">{{ entry.timestamp.isoformat() }}</time>
+    · <strong>{{ entry.source.value }}</strong>
+    · <code>{{ entry.identifier_type.value }}:{{ entry.identifier_value }}</code>
+    · <code>{{ entry.evidence_sha256_short }}…</code>
+    · <a href="{{ entry.source_url }}">source</a>
+    {% if entry.archive_url %}· <a href="{{ entry.archive_url }}">archive</a>{% endif %}
+    {% if entry.screenshot_path %}· <a href="{{ entry.screenshot_path }}">screenshot</a>{% endif %}
+  </li>
+{% endfor %}
+</ol>
+{% else %}
+<p class="empty">no events</p>
 {% endif %}
 
 <h2>Correlation edges</h2>
@@ -174,6 +205,7 @@ def to_dossier_html(
         generated_at=datetime.now(UTC).isoformat(),
         identifiers=subject.identifiers,
         traces=traces,
+        timeline=build_timeline(traces),
         edges=edges,
         summary=summary,
         hypotheses=hypotheses,

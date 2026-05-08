@@ -72,6 +72,29 @@ def test_html_renders_traces_with_evidence_hash() -> None:
     assert "researcher" in html
 
 
+def test_html_renders_timeline_section() -> None:
+    subject, traces, edges = _build_dossier()
+    html = to_dossier_html(subject=subject, traces=traces, edges=edges)
+    assert "<h2>Timeline</h2>" in html
+    assert 'class="timeline"' in html
+    assert "2026-01-01T12:00:00+00:00" in html
+    # Timeline appears after Traces and before Correlation edges.
+    assert (
+        html.index("<h2>Traces</h2>")
+        < html.index("<h2>Timeline</h2>")
+        < html.index("<h2>Correlation edges</h2>")
+    )
+
+
+def test_html_timeline_falls_back_to_empty_state() -> None:
+    seed = Identifier(type=IdentifierType.USERNAME, value="ghost")
+    subject = Subject(id="subj-ghost00000001", seed_identifier=seed, identifiers=[seed])
+    html = to_dossier_html(subject=subject, traces=[], edges=[])
+    assert "<h2>Timeline</h2>" in html
+    # Two empty placeholders: Traces + Timeline + Edges.
+    assert html.count('class="empty">no events') == 1
+
+
 def test_html_renders_archive_url_when_present() -> None:
     subject, traces, edges = _build_dossier()
     snap = "https://web.archive.org/web/2026/https://api.github.com/users/alice"

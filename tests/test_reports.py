@@ -33,6 +33,9 @@ def test_dossier_dict_round_trips_via_json(
     assert json.loads(text) == payload
     assert payload["subject"]["id"] == "subj-test"
     assert len(payload["traces"]) == 2
+    assert len(payload["timeline"]) == 2
+    timestamps = [entry["timestamp"] for entry in payload["timeline"]]
+    assert timestamps == sorted(timestamps)
     assert payload["ai"] == {"summary": None, "hypotheses": None}
 
 
@@ -53,10 +56,13 @@ def test_dossier_md_contains_key_sections(
     assert md.startswith("# Reckora dossier — username:alice")
     assert "## Identifiers" in md
     assert "## Traces" in md
+    assert "## Timeline" in md
     assert "## Correlation edges" in md
     assert "## AI summary" in md
     assert "Likely the same person." in md
     assert "## AI hypotheses" in md
+    # Timeline appears after Traces and before Correlation edges.
+    assert md.index("## Traces") < md.index("## Timeline") < md.index("## Correlation edges")
 
 
 def test_dossier_md_handles_no_traces() -> None:
@@ -64,5 +70,6 @@ def test_dossier_md_handles_no_traces() -> None:
     subject = Subject(id="subj-empty", seed_identifier=seed, identifiers=[seed])
     md = to_dossier_md(subject=subject, traces=[], edges=[])
     assert "_no traces_" in md
+    assert "_no events_" in md
     assert "_no edges_" in md
     assert "## AI summary" not in md

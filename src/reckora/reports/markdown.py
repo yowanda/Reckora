@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from ..models.entity import Edge, Subject, Trace
+from .timeline import build_timeline
 
 
 def to_dossier_md(
@@ -50,6 +51,20 @@ def to_dossier_md(
     else:
         lines.append("_no traces_")
         lines.append("")
+
+    lines.append("## Timeline")
+    timeline = build_timeline(traces)
+    if timeline:
+        for entry in timeline:
+            short = entry.evidence_sha256_short
+            lines.append(
+                f"- `{entry.timestamp.isoformat()}` · `{entry.source.value}` · "
+                f"`{entry.identifier_type.value}:{entry.identifier_value}` · "
+                f"`{short}…` ([source]({entry.source_url}))"
+            )
+    else:
+        lines.append("_no events_")
+    lines.append("")
 
     lines.append("## Correlation edges")
     if edges:
