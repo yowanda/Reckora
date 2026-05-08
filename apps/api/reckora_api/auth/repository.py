@@ -62,9 +62,7 @@ class UserRepository:
         """
         cols = {row[1] for row in self._conn.execute("PRAGMA table_info(users)").fetchall()}
         if "role" not in cols:
-            self._conn.execute(
-                "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'"
-            )
+            self._conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'")
 
     def close(self) -> None:
         self._conn.close()

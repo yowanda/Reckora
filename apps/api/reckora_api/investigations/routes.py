@@ -218,9 +218,7 @@ def list_subjects(
 
     def _owner(subject_id: str) -> str | None:
         if subject_id not in owner_cache:
-            owner_cache[subject_id] = _resolve_owner_username(
-                subject_id, access_repo, user_repo
-            )
+            owner_cache[subject_id] = _resolve_owner_username(subject_id, access_repo, user_repo)
         return owner_cache[subject_id]
 
     return [

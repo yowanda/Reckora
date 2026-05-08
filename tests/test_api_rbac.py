@@ -355,10 +355,7 @@ def test_owner_can_share_and_revoke(
 
     # Bob loses access.
     assert bob.get(f"/api/v1/subjects/{alice_subject['id']}").status_code == 404
-    assert all(
-        row["id"] != alice_subject["id"]
-        for row in bob.get("/api/v1/subjects").json()
-    )
+    assert all(row["id"] != alice_subject["id"] for row in bob.get("/api/v1/subjects").json())
 
 
 def test_share_idempotent(
@@ -584,8 +581,7 @@ def test_legacy_users_table_grants_admin_on_migration(tmp_path: object) -> None:
         """
     )
     conn.execute(
-        "INSERT INTO users(username, password_hash, created_at, is_active)"
-        " VALUES (?, ?, ?, 1)",
+        "INSERT INTO users(username, password_hash, created_at, is_active) VALUES (?, ?, ?, 1)",
         ("legacy", hash_password("legacypassword1"), datetime.now(UTC).isoformat()),
     )
     conn.commit()
