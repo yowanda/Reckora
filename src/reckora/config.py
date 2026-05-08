@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     # gracefully returns no traces so investigations stay deterministic
     # even on hosts that have never seen the key.
     hibp_api_key: str | None = Field(default=None, validation_alias="HIBP_API_KEY")
+    # Etherscan (https://docs.etherscan.io/) API key. The Ethereum wallet
+    # collector works without one (anonymous tier, ~5 req/sec / IP), but
+    # passing a key lifts the rate limit and is the recommended setup for
+    # production / batch investigations. Unlike HIBP this is *not* a
+    # feature flag — the collector is always wired into the orchestrator
+    # and the key is purely a rate-limit lever.
+    etherscan_api_key: str | None = Field(default=None, validation_alias="ETHERSCAN_API_KEY")
 
 
 settings = Settings()

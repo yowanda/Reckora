@@ -169,6 +169,47 @@ dossier with on-chain detail. The HTTP API enables the same collector
 automatically — any `POST /api/v1/investigations` with a `wallet`-kind
 seed routes through it.
 
+## Ethereum wallet identifiers
+
+Alongside Bitcoin, Reckora ships an `EthereumChainCollector` that resolves
+a `wallet` identifier against the public
+[Etherscan API](https://docs.etherscan.io/). The collector works on the
+anonymous tier (no key required) so it is wired into the default
+orchestrator unconditionally — passing `ETHERSCAN_API_KEY` simply lifts
+the rate limit, it is not a feature flag.
+
+```bash
+# Vitalik's well-known address (mainnet, EIP-55-checksummed):
+reckora investigate "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045" --kind wallet
+
+# Lowercase form is accepted too — checksum is purely a display convention.
+reckora investigate "0xd8da6bf26964af9d7eed9e03e53415d37aa96045" --kind wallet
+```
+
+The emitted trace normalises to a flat schema the dossier renderers can
+read without parsing the raw envelope at render time:
+`address` (lower-cased so identifier joins are case-insensitive),
+`address_input` (original casing, preserved verbatim for display so a
+user-supplied EIP-55 checksum survives round-tripping), `chain`
+(`"ethereum"`), `network` (`"mainnet"`), `address_format` (`"evm"` —
+shared across every EVM-compatible chain so a future Polygon /
+Arbitrum / Base adapter can reuse the schema unchanged), `balance_wei`,
+`balance_eth` (string-formatted with full 18-decimal precision, no
+float drift), `outgoing_tx_count` (account nonce — exactly the number
+of external txs the EOA has originated), `is_active`.
+
+The collector silently no-ops on `wallet` strings that are not
+EVM-shaped (e.g. a Bitcoin address) so the BTC adapter and any future
+Solana / Cosmos collector can coexist on `IdentifierType.WALLET`. Two
+Etherscan endpoints (`account/balance` and
+`proxy/eth_getTransactionCount`) are combined into a single Trace; the
+raw HTTP envelopes are dropped from evidence (`keep_raw=False`) and the
+SHA-256 of the canonicalised combined payload is preserved as the
+audit anchor. Etherscan's "Invalid address format" responses are
+treated as no-ops; quota / rate-limit responses are surfaced upstream
+so the orchestrator's per-collector logger records them once and the
+investigation continues without this collector's data.
+
 ## Phone identifiers
 
 Phone numbers are first-class identifiers. The bundled `PhoneCollector` is
@@ -290,6 +331,7 @@ Configuration (env vars, all optional except the secret):
 | `RECKORA_API_SCREENSHOTS_DIR` | `screenshots` | filesystem dir for captured PNGs |
 | `RECKORA_API_SCREENSHOTS_URL_PREFIX` | `/screenshots` | URL prefix at which the API serves PNGs |
 | `HIBP_API_KEY` | _(unset)_ | Have I Been Pwned API key (enables `--breach` / `breach: true`) |
+| `ETHERSCAN_API_KEY` | _(unset)_ | Etherscan API key — optional; lifts the anonymous tier's rate limit for the Ethereum wallet collector |
 
 ## Roadmap
 
