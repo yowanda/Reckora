@@ -16,9 +16,11 @@ from fastapi.staticfiles import StaticFiles
 
 from reckora.collectors.avatar import AvatarCollector
 from reckora.collectors.github_api import GitHubCollector
+from reckora.collectors.hackernews import HackerNewsCollector
 from reckora.collectors.phone import PhoneCollector
 from reckora.collectors.wallet_btc import BitcoinChainCollector
 from reckora.collectors.wallet_eth import EthereumChainCollector
+from reckora.collectors.wallet_sol import SolanaChainCollector
 from reckora.collectors.web_profile import WebProfileCollector
 from reckora.collectors.whois_rdap import WhoisRdapCollector
 from reckora.config import settings as engine_settings
@@ -37,11 +39,13 @@ def _default_orchestrator_factory() -> Orchestrator:
     return Orchestrator(
         [
             GitHubCollector(token=engine_settings.github_token),
+            HackerNewsCollector(),
             WhoisRdapCollector(),
             WebProfileCollector(),
             PhoneCollector(),
             BitcoinChainCollector(),
             EthereumChainCollector(api_key=engine_settings.etherscan_api_key),
+            SolanaChainCollector(),
             AvatarCollector(),
         ]
     )

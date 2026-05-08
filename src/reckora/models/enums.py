@@ -25,6 +25,7 @@ class TraceSource(StrEnum):
     """Where a Trace was collected from."""
 
     GITHUB_API = "github_api"
+    HACKERNEWS_API = "hackernews_api"
     WHOIS_RDAP = "whois_rdap"
     WEB_PROFILE = "web_profile"
     PHONE_LIBPHONENUMBER = "phone_libphonenumber"

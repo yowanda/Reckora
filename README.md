@@ -328,6 +328,46 @@ The raw image bytes are **never** inlined into the evidence row
 payload is preserved, so the chain stays auditable without bloating
 the saved dossier with binary blobs.
 
+## Hacker News usernames
+
+Alongside GitHub, Reckora ships a `HackerNewsCollector` that resolves a
+`username` Identifier against the public
+[Hacker News Firebase API](https://github.com/HackerNews/API) at
+`https://hacker-news.firebaseio.com/v0/user/{id}.json` — no API key, no
+registration, just the same anonymous read-only endpoint the official HN
+apps use. The collector is wired into the default orchestrator so any
+seed of `--kind username` whose value matches an HN account triggers it
+automatically.
+
+```bash
+reckora investigate pg --kind username
+```
+
+The emitted trace normalises to a flat schema the dossier renderers can
+read without parsing the raw envelope at render time:
+`platform` (`"hackernews"`), `username` (server-canonical form, falls
+back to the requested value), `profile_url`
+(`https://news.ycombinator.com/user?id=<username>`), `bio` (HTML stripped
+and entities decoded so the `bio_similarity` correlation rule sees
+readable prose), `bio_html` (the raw `about` blob preserved for
+renderers that want to display it), `karma`, `submission_count`,
+`created_at` (ISO-8601 UTC, lifted from the `created` epoch), and
+`is_active` — true if the account has karma above HN's 1-point default
+or has ever submitted a story / comment, false for accounts that
+registered but never posted.
+
+The collector silently no-ops on `username` strings whose shape can't
+match an HN account (HN allows 2–15 characters of `[A-Za-z0-9_-]`), so
+it coexists cleanly with the GitHub username collector, the Bitcoin /
+Ethereum / Solana wallet collectors that ride on `IdentifierType.WALLET`
+indirectly, and any future username adapters. A literal JSON `null`
+response from the HN endpoint (HN's signal for "no such account") is
+treated the same as a 404 — no trace is emitted and the orchestrator
+moves on. The raw HTTP envelope is **never** inlined into the evidence
+row (`keep_raw=False`) — only the SHA-256 of the canonicalised payload
+is preserved, so the chain stays auditable without bloating the saved
+dossier with multi-thousand-element `submitted` arrays.
+
 ## Phone identifiers
 
 Phone numbers are first-class identifiers. The bundled `PhoneCollector` is

@@ -22,6 +22,7 @@ from .auth.storage import (
 from .collectors.avatar import AvatarCollector
 from .collectors.breach import BreachCollector
 from .collectors.github_api import GitHubCollector
+from .collectors.hackernews import HackerNewsCollector
 from .collectors.phone import PhoneCollector
 from .collectors.wallet_btc import BitcoinChainCollector
 from .collectors.wallet_eth import EthereumChainCollector
@@ -72,6 +73,7 @@ def _identifier_from(value: str, kind: str) -> Identifier:
 def _build_orchestrator(*, breach_enabled: bool = False) -> Orchestrator:
     collectors: list[object] = [
         GitHubCollector(token=settings.github_token),
+        HackerNewsCollector(),
         WhoisRdapCollector(),
         WebProfileCollector(),
         PhoneCollector(),

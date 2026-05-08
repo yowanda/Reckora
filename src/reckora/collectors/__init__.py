@@ -9,6 +9,7 @@ from __future__ import annotations
 from .avatar import AvatarCollector
 from .base import Collector
 from .github_api import GitHubCollector
+from .hackernews import HackerNewsCollector
 from .phone import PhoneCollector
 from .wallet_btc import BitcoinChainCollector
 from .wallet_eth import EthereumChainCollector
@@ -22,6 +23,7 @@ __all__ = [
     "Collector",
     "EthereumChainCollector",
     "GitHubCollector",
+    "HackerNewsCollector",
     "PhoneCollector",
     "SolanaChainCollector",
     "WebProfileCollector",
