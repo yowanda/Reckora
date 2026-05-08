@@ -328,6 +328,157 @@ The raw image bytes are **never** inlined into the evidence row
 payload is preserved, so the chain stays auditable without bloating
 the saved dossier with binary blobs.
 
+## Hacker News usernames
+
+Alongside GitHub, Reckora ships a `HackerNewsCollector` that resolves a
+`username` Identifier against the public
+[Hacker News Firebase API](https://github.com/HackerNews/API) at
+`https://hacker-news.firebaseio.com/v0/user/{id}.json` — no API key, no
+registration, just the same anonymous read-only endpoint the official HN
+apps use. The collector is wired into the default orchestrator so any
+seed of `--kind username` whose value matches an HN account triggers it
+automatically.
+
+```bash
+reckora investigate pg --kind username
+```
+
+The emitted trace normalises to a flat schema the dossier renderers can
+read without parsing the raw envelope at render time:
+`platform` (`"hackernews"`), `username` (server-canonical form, falls
+back to the requested value), `profile_url`
+(`https://news.ycombinator.com/user?id=<username>`), `bio` (HTML stripped
+and entities decoded so the `bio_similarity` correlation rule sees
+readable prose), `bio_html` (the raw `about` blob preserved for
+renderers that want to display it), `karma`, `submission_count`,
+`created_at` (ISO-8601 UTC, lifted from the `created` epoch), and
+`is_active` — true if the account has karma above HN's 1-point default
+or has ever submitted a story / comment, false for accounts that
+registered but never posted.
+
+The collector silently no-ops on `username` strings whose shape can't
+match an HN account (HN allows 2–15 characters of `[A-Za-z0-9_-]`), so
+it coexists cleanly with the GitHub username collector, the Bitcoin /
+Ethereum / Solana wallet collectors that ride on `IdentifierType.WALLET`
+indirectly, and any future username adapters. A literal JSON `null`
+response from the HN endpoint (HN's signal for "no such account") is
+treated the same as a 404 — no trace is emitted and the orchestrator
+moves on. The raw HTTP envelope is **never** inlined into the evidence
+row (`keep_raw=False`) — only the SHA-256 of the canonicalised payload
+is preserved, so the chain stays auditable without bloating the saved
+dossier with multi-thousand-element `submitted` arrays.
+
+## Keybase usernames
+
+Alongside GitHub and Hacker News, Reckora ships a `KeybaseCollector`
+that resolves a `username` Identifier against the public
+[Keybase user-lookup endpoint](https://keybase.io/docs/api/1.0/call/user/lookup)
+at `https://keybase.io/_/api/1.0/user/lookup.json?usernames={id}` — no
+API key, no registration, just the same anonymous read-only endpoint
+the public `keybase` CLI hits for `keybase id <user>`. The collector
+is wired into the default orchestrator (CLI and HTTP API) so any seed
+of `--kind username` that matches a Keybase account triggers it
+automatically.
+
+```bash
+reckora investigate chrisco --kind username
+```
+
+Keybase is a high-signal collector for OSINT correlation because the
+platform is itself an *aggregator* of identity proofs: a single
+Keybase profile typically links a Twitter handle, GitHub account,
+Reddit account, one or more DNS-based domain proofs, and a PGP public
+key, all signed by the same device key. Surfacing those linked
+accounts as a structured `proofs` array lets the correlation engine
+pivot from one identifier to another without ever scraping a profile
+page.
+
+The emitted trace normalises to a flat schema the dossier renderers
+can read without parsing the raw envelope at render time: `platform`
+(`"keybase"`), `username` (server-canonical lowercase form, falls back
+to the requested value), `profile_url` (`https://keybase.io/<username>`),
+`display_name`, `bio`, `location`, `created_at` (ISO-8601 UTC, lifted
+from the `ctime` epoch), `proofs` (list of
+`{platform, identity, url}` for every *currently-live* identity proof
+— pending, revoked or permanently failed proofs are filtered out so
+they never feed correlation), `has_pgp_key` plus `pgp_fingerprint`
+when the account has published a primary key, and `is_active` — true
+if Keybase sees any verified identity signal (live proof, PGP key, or
+filled-out profile), false for accounts that registered but never
+linked anything.
+
+The collector silently no-ops on `username` strings whose shape can't
+match a Keybase account (Keybase allows 2–16 characters of
+`[A-Za-z0-9_]`, no hyphens), so it coexists with the GitHub / HN
+collectors and the wallet collectors that ride on
+`IdentifierType.WALLET`. Casing drift in the seed is normalised before
+the round-trip — Keybase canonicalises every username to lowercase
+server-side, but the `usernames=` query parameter is *case-sensitive*
+in the validation step and would otherwise return a silent
+`INPUT_ERROR`. Lookup misses are reported by Keybase through
+`status.code != 0` (typically `100` = `INPUT_ERROR`) **and** through a
+literal `null` entry inside the `them[]` array even when the envelope
+is OK — the collector treats both signals the same way the GitHub /
+HN collectors treat a 404. The raw HTTP envelope is **never** inlined
+into the evidence row (`keep_raw=False`) — only the SHA-256 of the
+canonicalised payload is preserved, so the chain stays auditable
+without bloating the saved dossier with multi-KB device chains and
+public-key bundles.
+
+## Gravatar emails
+
+Email addresses are first-class identifiers. The bundled
+`GravatarCollector` resolves an `email` Identifier against the public
+[Gravatar profile JSON endpoint](https://docs.gravatar.com/api/profiles/json/)
+at `https://www.gravatar.com/{md5_hash}.json` — no API key, no
+registration. Gravatar derives the lookup hash from the *trimmed,
+lowercased* email address (per its documented hashing rules), so the
+collector hashes locally before hitting the network and the plaintext
+email never leaves the process. The collector is wired into the default
+orchestrator (CLI and HTTP API) so any seed of `--kind email` that
+matches a Gravatar account triggers it automatically.
+
+```bash
+reckora investigate alice@example.com --kind email
+```
+
+Gravatar is high-signal for OSINT correlation because the identifier
+is not the email itself but its hash: a positive match yields a
+display name, preferred username, location, bio, profile photo URL,
+**and** an `accounts[]` array of verified linked accounts (Twitter,
+GitHub, LinkedIn, …) that the entity-resolution layer can fan out from.
+The collector also surfaces the canonical `profile_photo_url` so the
+existing avatar-perceptual-hash collector can pick it up via a fresh
+URL identifier without needing a separate scrape pass.
+
+The emitted trace normalises to a flat schema the dossier renderers
+can read without parsing the raw envelope at render time: `platform`
+(`"gravatar"`), `email_hash` (the canonical MD5 — the collector never
+stores the plaintext email in the trace, so dossiers never leak PII),
+`profile_url` (defaulting to `https://www.gravatar.com/{hash}` if the
+response omits a fully-qualified URL), `preferred_username`,
+`display_name`, `bio`, `location`, `profile_photo_url` (preferring
+`thumbnailUrl`, falling back to the first entry of `photos[]`, then
+`avatar_url`), `accounts` (list of `{platform, username, url}` for
+every linked account that supplies all three fields — partial entries
+are dropped so they never feed correlation), and `is_active` — true if
+Gravatar exposes any concrete public-facing claim (display name,
+preferred username, bio, or at least one verified linked account),
+false for hash-only accounts that registered but never filled out a
+profile.
+
+The collector silently no-ops on `email` strings whose shape isn't a
+valid email (no `@` after trimming, empty after trimming), so it
+coexists with collectors that ride on other identifier types. Lookup
+misses are reported by Gravatar through both an HTTP `404` **and** a
+literal JSON string `"User not found"` (sometimes served with a `200`
+status from CDN caches) — the collector treats both signals the same
+way the GitHub / HN / Keybase collectors treat a 404. The raw HTTP
+envelope is **never** inlined into the evidence row (`keep_raw=False`)
+— only the SHA-256 of the canonicalised payload is preserved, so the
+chain stays auditable without bloating the saved dossier with long
+bios, multiple linked accounts, and embedded URLs.
+
 ## Phone identifiers
 
 Phone numbers are first-class identifiers. The bundled `PhoneCollector` is

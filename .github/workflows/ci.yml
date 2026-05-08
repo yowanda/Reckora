@@ -3,8 +3,14 @@ name: ci
 on:
   push:
     branches: [main]
+  # Run on every pull request, regardless of base branch, so stacked PRs
+  # (e.g. yowanda/A -> yowanda/B -> main) still get the same lint + type +
+  # test signal as PRs that target main directly. The original filter only
+  # ran CI for PRs whose base branch was ``main``, which silently skipped
+  # CI on every intermediate PR in a stack and hid breakages until the
+  # whole stack landed.
   pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
