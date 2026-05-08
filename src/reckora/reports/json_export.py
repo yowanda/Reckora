@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..anomaly import detect_anomalies
 from ..models.entity import Edge, Subject, Trace
 
 
@@ -20,6 +21,7 @@ def to_dossier_dict(
     return {
         "subject": subject.model_dump(mode="json"),
         "traces": [t.model_dump(mode="json") for t in traces],
+        "anomalies": [a.model_dump(mode="json") for a in detect_anomalies(traces)],
         "edges": [e.model_dump(mode="json") for e in edges],
         "ai": {
             "summary": summary,

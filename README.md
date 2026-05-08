@@ -33,8 +33,20 @@ reckora investigate octocat --kind username --format pdf  > dossier.pdf
 The HTML dossier is fully self-contained (inline CSS, no external assets) so it
 opens straight from disk and supports light / dark mode. The PDF dossier is
 generated with reportlab (pure Python, no system libs) and mirrors the same
-structure: header → identifiers → traces → correlation edges → optional AI
-summary / hypotheses, with clickable source / archive links.
+structure: header → identifiers → traces → **anomalies** → correlation edges →
+optional AI summary / hypotheses, with clickable source / archive links.
+
+Every dossier (markdown / HTML / PDF) carries an `## Anomalies` section
+populated by a rule-based detector
+(`reckora.anomaly.detect_anomalies(traces)`). It currently surfaces
+future-dated evidence, internal timestamp inconsistencies (`created_at`
+postdating `updated_at` or `Evidence.fetched_at`), expired domains
+(WHOIS / RDAP `expires_at` < observation), invalid phone numbers
+(`is_valid=False`), and display-name divergence across collectors.
+Findings are sorted high → low severity and cite the supporting payload
+SHAs so every claim stays auditable. JSON export and
+`GET /api/v1/subjects/{id}` surface the same data as a top-level
+`anomalies[]` array.
 
 Persist a dossier to the SQLite store and reopen it later:
 

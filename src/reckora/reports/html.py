@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 
 import jinja2
 
+from ..anomaly import AnomalySeverity, detect_anomalies
 from ..models.entity import Edge, Subject, Trace
 
 _TEMPLATE = """<!DOCTYPE html>
@@ -60,6 +61,21 @@ ul.idents li { display: inline-block; margin: .15rem .3rem .15rem 0;
 }
 .empty { color: #888; font-style: italic; }
 .ai { white-space: pre-wrap; font-size: .95rem; }
+ul.anomalies { list-style: none; padding: 0; margin: 0; }
+ul.anomalies li { padding: .55rem .75rem; margin: .35rem 0;
+                  border-left: 4px solid #d0d0d0; background: #fff;
+                  border-radius: 0 6px 6px 0; }
+ul.anomalies li.sev-high   { border-left-color: #99312a; }
+ul.anomalies li.sev-medium { border-left-color: #b88600; }
+ul.anomalies li.sev-low    { border-left-color: #1f7a4d; }
+ul.anomalies .kind { font-size: .8rem; color: #555; text-transform: uppercase;
+                     letter-spacing: .04em; margin-left: .4rem; }
+ul.anomalies .refs { font-size: .8rem; color: #666; margin-top: .25rem; }
+@media (prefers-color-scheme: dark) {
+  ul.anomalies li { background: #1d2025; }
+  ul.anomalies .kind { color: #9aa0a6; }
+  ul.anomalies .refs { color: #9aa0a6; }
+}
 </style>
 </head>
 <body>
@@ -107,6 +123,26 @@ ul.idents li { display: inline-block; margin: .15rem .3rem .15rem 0;
 <p class="empty">no traces</p>
 {% endif %}
 
+<h2>Anomalies</h2>
+{% if anomalies %}
+<ul class="anomalies">
+{% for a in anomalies %}
+  <li class="sev-{{ a.severity.value }}">
+    <span class="badge badge-{{ severity_band(a.severity) }}">{{ a.severity.value|upper }}</span>
+    <span class="kind">{{ a.kind.value }}</span>
+    <div>{{ a.message }}</div>
+    {% if a.supporting_evidence %}
+    <div class="refs">
+      {% for sha in a.supporting_evidence %}<code>{{ sha[:16] }}…</code>{% if not loop.last %} {% endif %}{% endfor %}
+    </div>
+    {% endif %}
+  </li>
+{% endfor %}
+</ul>
+{% else %}
+<p class="empty">no anomalies detected</p>
+{% endif %}
+
 <h2>Correlation edges</h2>
 {% if edges %}
 {% for e in edges %}
@@ -150,6 +186,19 @@ def _confidence_band(value: float) -> str:
     return "low"
 
 
+def _severity_band(severity: AnomalySeverity) -> str:
+    """Reuse the confidence-badge palette for anomaly severities.
+
+    HIGH severity = LOW confidence band (red), so the visual weight matches
+    "this is bad".
+    """
+    return {
+        AnomalySeverity.HIGH: "low",
+        AnomalySeverity.MEDIUM: "medium",
+        AnomalySeverity.LOW: "high",
+    }[severity]
+
+
 def to_dossier_html(
     *,
     subject: Subject,
@@ -166,6 +215,7 @@ def to_dossier_html(
         undefined=jinja2.StrictUndefined,
     )
     env.globals["confidence_band"] = _confidence_band
+    env.globals["severity_band"] = _severity_band
     template = env.from_string(_TEMPLATE)
     return template.render(
         seed_kind=subject.seed_identifier.type.value,
@@ -174,6 +224,7 @@ def to_dossier_html(
         generated_at=datetime.now(UTC).isoformat(),
         identifiers=subject.identifiers,
         traces=traces,
+        anomalies=detect_anomalies(traces),
         edges=edges,
         summary=summary,
         hypotheses=hypotheses,

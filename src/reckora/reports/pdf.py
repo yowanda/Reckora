@@ -25,6 +25,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from ..anomaly import Anomaly, AnomalySeverity, detect_anomalies
 from ..models.entity import Edge, Subject, Trace
 
 
@@ -111,6 +112,13 @@ def _confidence_color(value: float) -> colors.Color:
     return colors.HexColor("#99312a")
 
 
+_SEVERITY_COLORS: dict[AnomalySeverity, str] = {
+    AnomalySeverity.HIGH: "#99312a",
+    AnomalySeverity.MEDIUM: "#b88600",
+    AnomalySeverity.LOW: "#1f7a4d",
+}
+
+
 def _esc(value: object) -> str:
     """Escape a value for inclusion inside a reportlab Paragraph."""
     text = str(value)
@@ -186,6 +194,61 @@ def _trace_card(trace: Trace, styles: dict[str, ParagraphStyle]) -> KeepTogether
         rows.append((str(k), f"<font face='Courier'>{_esc(v)}</font>"))
 
     return KeepTogether([title, _kv_table(rows, styles), Spacer(1, 6)])
+
+
+def _anomaly_table(
+    anomalies: list[Anomaly],
+    styles: dict[str, ParagraphStyle],
+) -> Table:
+    header = [
+        Paragraph("<b>severity</b>", styles["body"]),
+        Paragraph("<b>kind</b>", styles["body"]),
+        Paragraph("<b>message</b>", styles["body"]),
+        Paragraph("<b>evidence</b>", styles["body"]),
+    ]
+    data: list[list[Paragraph]] = [header]
+    for a in anomalies:
+        sev_color = _SEVERITY_COLORS[a.severity][1:]
+        sev_cell = Paragraph(
+            f"<font color='#{sev_color}'><b>{a.severity.value.upper()}</b></font>",
+            styles["body"],
+        )
+        kind_cell = Paragraph(
+            f"<font face='Courier'>{_esc(a.kind.value)}</font>",
+            styles["body"],
+        )
+        msg_cell = Paragraph(_esc(a.message), styles["body"])
+        refs = (
+            "<br/>".join(
+                f"<font face='Courier'>{_esc(sha[:16])}…</font>" for sha in a.supporting_evidence
+            )
+            or "&nbsp;"
+        )
+        evidence_cell = Paragraph(refs, styles["body"])
+        data.append([sev_cell, kind_cell, msg_cell, evidence_cell])
+
+    table = Table(
+        data,
+        colWidths=[20 * mm, 35 * mm, 70 * mm, 40 * mm],
+        repeatRows=1,
+        hAlign="LEFT",
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef1f5")),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.HexColor("#cccccc")),
+                ("LINEBELOW", (0, 1), (-1, -1), 0.25, colors.HexColor("#eeeeee")),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    return table
 
 
 def _edge_table(edges: list[Edge], styles: dict[str, ParagraphStyle]) -> Table:
@@ -282,6 +345,13 @@ def to_dossier_pdf(
             story.append(_trace_card(t, styles))
     else:
         story.append(Paragraph("no traces", styles["empty"]))
+
+    story.append(Paragraph("Anomalies", styles["h2"]))
+    anomalies = detect_anomalies(traces)
+    if anomalies:
+        story.append(_anomaly_table(anomalies, styles))
+    else:
+        story.append(Paragraph("no anomalies detected", styles["empty"]))
 
     story.append(Paragraph("Correlation edges", styles["h2"]))
     if edges:
