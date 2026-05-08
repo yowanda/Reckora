@@ -156,7 +156,7 @@ def test_get_subject_dossier_json(authed_client: TestClient) -> None:
     assert body["subject"]["seed_identifier"]["value"] == "alice"
 
 
-def test_get_subject_dossier_rejects_unknown_format(authed_client: TestClient) -> None:
+def test_get_subject_dossier_pdf(authed_client: TestClient) -> None:
     created = authed_client.post(
         "/api/v1/investigations",
         json={"seed": {"kind": "username", "value": "alice"}},
@@ -164,6 +164,23 @@ def test_get_subject_dossier_rejects_unknown_format(authed_client: TestClient) -
     response = authed_client.get(
         f"/api/v1/subjects/{created['id']}/dossier",
         params={"format": "pdf"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"].startswith("inline;")
+    assert created["id"] in response.headers["content-disposition"]
+    assert response.content.startswith(b"%PDF-")
+    assert b"%%EOF" in response.content[-32:]
+
+
+def test_get_subject_dossier_rejects_unknown_format(authed_client: TestClient) -> None:
+    created = authed_client.post(
+        "/api/v1/investigations",
+        json={"seed": {"kind": "username", "value": "alice"}},
+    ).json()
+    response = authed_client.get(
+        f"/api/v1/subjects/{created['id']}/dossier",
+        params={"format": "xml"},
     )
     assert response.status_code == 422
 

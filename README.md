@@ -18,24 +18,31 @@ reckora investigate octocat --kind username
 reckora investigate example.com --kind domain --ai
 ```
 
-Pick the dossier format with `--format md|json|html`, or write straight to a
-file (the format is inferred from the extension `.md` / `.json` / `.html`):
+Pick the dossier format with `--format md|json|html|pdf`, or write straight to
+a file (the format is inferred from the extension `.md` / `.json` / `.html` /
+`.pdf`):
 
 ```bash
 reckora investigate https://github.com/octocat --kind url --output dossier.md
 reckora investigate octocat --kind username --output dossier.html
+reckora investigate octocat --kind username --output dossier.pdf
 reckora investigate octocat --kind username --format html > dossier.html
+reckora investigate octocat --kind username --format pdf  > dossier.pdf
 ```
 
 The HTML dossier is fully self-contained (inline CSS, no external assets) so it
-opens straight from disk and supports light / dark mode.
+opens straight from disk and supports light / dark mode. The PDF dossier is
+generated with reportlab (pure Python, no system libs) and mirrors the same
+structure: header → identifiers → traces → correlation edges → optional AI
+summary / hypotheses, with clickable source / archive links.
 
 Persist a dossier to the SQLite store and reopen it later:
 
 ```bash
 reckora investigate octocat --kind username --save
 reckora list
-reckora show subj-...      # md (default), --format json|html supported
+reckora show subj-...                                # md (default)
+reckora show subj-... --format pdf -o dossier.pdf    # md|json|html|pdf
 reckora delete subj-...
 ```
 
@@ -88,6 +95,11 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/investigations \
 
 curl -s -H "authorization: Bearer $TOKEN" \
   http://127.0.0.1:8000/api/v1/subjects
+
+# Download a PDF dossier for a saved subject:
+curl -s -H "authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:8000/api/v1/subjects/<subject-id>/dossier?format=pdf" \
+  -o dossier.pdf
 ```
 
 Endpoints (all under `/api/v1`, all require `Authorization: Bearer <token>`
@@ -101,7 +113,7 @@ except `/auth/register` and `/auth/token`):
 | POST | `/investigations` | run orchestrator + persist (`archive`, `ai` flags) |
 | GET  | `/subjects` | list saved dossiers (`?limit=`) |
 | GET  | `/subjects/{id}` | full saved dossier as JSON |
-| GET  | `/subjects/{id}/dossier?format=html\|json\|md` | render dossier |
+| GET  | `/subjects/{id}/dossier?format=html\|json\|md\|pdf` | render dossier |
 | DELETE | `/subjects/{id}` | drop a saved dossier |
 
 Configuration (env vars, all optional except the secret):
