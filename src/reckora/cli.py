@@ -10,6 +10,7 @@ from typing import Annotated
 import typer
 
 from . import __version__
+from .collectors.breach import BreachCollector
 from .collectors.github_api import GitHubCollector
 from .collectors.phone import PhoneCollector
 from .collectors.web_profile import WebProfileCollector
@@ -47,15 +48,19 @@ def _identifier_from(value: str, kind: str) -> Identifier:
     return Identifier(type=identifier_type, value=value)
 
 
-def _build_orchestrator() -> Orchestrator:
-    return Orchestrator(
-        [
-            GitHubCollector(token=settings.github_token),
-            WhoisRdapCollector(),
-            WebProfileCollector(),
-            PhoneCollector(),
-        ]
-    )
+def _build_orchestrator(*, breach_enabled: bool = False) -> Orchestrator:
+    collectors: list[object] = [
+        GitHubCollector(token=settings.github_token),
+        WhoisRdapCollector(),
+        WebProfileCollector(),
+        PhoneCollector(),
+    ]
+    if breach_enabled:
+        # Feature-flagged opt-in: only added when --breach is set so that
+        # stock investigations never call HIBP. The collector itself
+        # additionally short-circuits to [] when ``HIBP_API_KEY`` is unset.
+        collectors.append(BreachCollector(api_key=settings.hibp_api_key))
+    return Orchestrator(collectors)  # type: ignore[arg-type]
 
 
 def _render_dossier(
@@ -152,8 +157,9 @@ async def _run(
     use_ai: bool,
     archiver: Archiver | None = None,
     screenshotter: Screenshotter | None = None,
+    breach_enabled: bool = False,
 ) -> tuple[Subject, list[Trace], list[Edge], str | None, str | None]:
-    orchestrator = _build_orchestrator()
+    orchestrator = _build_orchestrator(breach_enabled=breach_enabled)
     subject, traces, edges = await orchestrator.investigate(
         seed,
         extra_identifiers=extras,
@@ -260,6 +266,16 @@ def investigate(
             help="Directory where captured PNGs are written (created if missing).",
         ),
     ] = Path("screenshots"),
+    breach: Annotated[
+        bool,
+        typer.Option(
+            "--breach",
+            help=(
+                "Enable the Have I Been Pwned breach-lookup collector for "
+                "email identifiers (requires HIBP_API_KEY; off by default)."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Run a Reckora investigation against a seed Identifier."""
     seed = _identifier_from(value, kind)
@@ -283,6 +299,7 @@ def investigate(
                 ai,
                 archiver=archiver,
                 screenshotter=screenshotter,
+                breach_enabled=breach,
             )
         finally:
             for resource in (archiver, screenshotter):

@@ -28,6 +28,7 @@ class TraceSource(StrEnum):
     WHOIS_RDAP = "whois_rdap"
     WEB_PROFILE = "web_profile"
     PHONE_LIBPHONENUMBER = "phone_libphonenumber"
+    BREACH_HIBP = "breach_hibp"
     USER_PROVIDED = "user_provided"
 
 

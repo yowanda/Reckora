@@ -34,6 +34,12 @@ class Settings(BaseSettings):
         default="reckora.db",
         validation_alias="RECKORA_DB_PATH",
     )
+    # Have I Been Pwned (https://haveibeenpwned.com/API/v3) API key. The
+    # breach lookup collector is opt-in (CLI ``--breach`` flag, API
+    # ``breach: true``) AND requires this key; without it the collector
+    # gracefully returns no traces so investigations stay deterministic
+    # even on hosts that have never seen the key.
+    hibp_api_key: str | None = Field(default=None, validation_alias="HIBP_API_KEY")
 
 
 settings = Settings()
