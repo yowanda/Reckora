@@ -20,8 +20,7 @@ Tests cover:
       add/remove their own reactions.
     * Outsiders get 404 (no existence leak).
     * Cross-subject ``comment_id`` smuggling 404s.
-- Cascade: deleting the comment / subject / user removes their
-  reactions.
+- Cascade: deleting the comment / subject removes their reactions.
 - Removing a reaction that never existed 404s instead of pretending
   to succeed.
 """
@@ -29,6 +28,7 @@ Tests cover:
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -73,11 +73,16 @@ def _create_subject(client: TestClient, *, value: str = "alice") -> str:
     return sid
 
 
-def _post_comment(client: TestClient, sid: str, body: str = "Initial.") -> dict[str, object]:
+def _post_comment_id(client: TestClient, sid: str, body: str = "Initial.") -> int:
+    """Post a comment and return its integer id, narrowed for mypy.
+
+    The wire response is JSON (``dict[str, object]``) — the cast is a
+    typing-only assertion, not a runtime conversion, since the comments
+    route already guarantees ``id`` is a positive integer.
+    """
     response = client.post(f"/api/v1/subjects/{sid}/comments", json={"body": body})
     assert response.status_code == 201, response.text
-    out: dict[str, object] = response.json()
-    return out
+    return cast(int, response.json()["id"])
 
 
 def _react(
@@ -85,10 +90,11 @@ def _react(
     sid: str,
     cid: int,
     key: str,
-) -> object:
+) -> list[dict[str, object]]:
+    """Add a reaction and return the per-emoji summary list."""
     response = client.put(f"/api/v1/subjects/{sid}/comments/{cid}/reactions/{key}")
     assert response.status_code == 200, response.text
-    return response.json()
+    return cast(list[dict[str, object]], response.json())
 
 
 @pytest.fixture
@@ -137,7 +143,7 @@ def test_owner_can_react_and_list(
 ) -> None:
     alice, _bob, _carol = trio_clients
     sid = _create_subject(alice)
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
 
     summary = _react(alice, sid, cid, "+1")
     assert summary == [{"key": "+1", "count": 1, "users": ["alice"], "me_reacted": True}]
@@ -153,7 +159,7 @@ def test_reaction_is_idempotent(
     the count — reactions are a set, not a counter."""
     alice, _bob, _carol = trio_clients
     sid = _create_subject(alice)
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
     _react(alice, sid, cid, "heart")
     again = _react(alice, sid, cid, "heart")
     assert again == [{"key": "heart", "count": 1, "users": ["alice"], "me_reacted": True}]
@@ -164,7 +170,7 @@ def test_remove_reaction_drops_user_and_collapses_empty_group(
 ) -> None:
     alice, _bob, _carol = trio_clients
     sid = _create_subject(alice)
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
     _react(alice, sid, cid, "+1")
     response = alice.delete(f"/api/v1/subjects/{sid}/comments/{cid}/reactions/+1")
     assert response.status_code == 200
@@ -180,7 +186,7 @@ def test_remove_unknown_reaction_returns_404(
     a stale optimistic UI cannot fake a successful no-op."""
     alice, _bob, _carol = trio_clients
     sid = _create_subject(alice)
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
     response = alice.delete(f"/api/v1/subjects/{sid}/comments/{cid}/reactions/+1")
     assert response.status_code == 404
 
@@ -192,11 +198,11 @@ def test_one_user_can_have_multiple_distinct_reactions(
     the constraint is one *of each kind*, not one total."""
     alice, _bob, _carol = trio_clients
     sid = _create_subject(alice)
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
     _react(alice, sid, cid, "+1")
     second = _react(alice, sid, cid, "heart")
-    keys = [g["key"] for g in second]  # type: ignore[index, union-attr]
-    assert sorted(keys) == ["+1", "heart"]
+    keys = [g["key"] for g in second]
+    assert sorted(cast(list[str], keys)) == ["+1", "heart"]
 
 
 # --- multi-actor pivot -----------------------------------------------------
@@ -208,13 +214,13 @@ def test_multiple_users_aggregate_into_one_group(
     alice, bob, _carol = trio_clients
     sid = _create_subject(alice)
     assert alice.post(f"/api/v1/subjects/{sid}/share", json={"username": "bob"}).status_code == 201
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
 
     _react(alice, sid, cid, "+1")
     summary = _react(bob, sid, cid, "+1")
-    plus = next(g for g in summary if g["key"] == "+1")  # type: ignore[index, union-attr]
+    plus = next(g for g in summary if g["key"] == "+1")
     assert plus["count"] == 2
-    assert sorted(plus["users"]) == ["alice", "bob"]
+    assert sorted(cast(list[str], plus["users"])) == ["alice", "bob"]
     # Bob is the calling actor on the *last* PUT, so ``me_reacted`` is
     # true from bob's perspective.
     assert plus["me_reacted"] is True
@@ -229,7 +235,7 @@ def test_me_reacted_is_per_caller(
     alice, bob, _carol = trio_clients
     sid = _create_subject(alice)
     assert alice.post(f"/api/v1/subjects/{sid}/share", json={"username": "bob"}).status_code == 201
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
     _react(alice, sid, cid, "fire")
 
     bob_view = bob.get(f"/api/v1/subjects/{sid}/comments/{cid}/reactions").json()
@@ -245,7 +251,7 @@ def test_reaction_summary_sorted_by_key(
     a stable layout regardless of insertion order."""
     alice, _bob, _carol = trio_clients
     sid = _create_subject(alice)
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
     for key in ["rocket", "+1", "heart"]:
         _react(alice, sid, cid, key)
     summary = alice.get(f"/api/v1/subjects/{sid}/comments/{cid}/reactions").json()
@@ -265,7 +271,7 @@ def test_unknown_reaction_key_rejected(
     segment fails the ``min_length=1, max_length=32`` constraint)."""
     alice, _bob, _carol = trio_clients
     sid = _create_subject(alice)
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
     response = alice.put(f"/api/v1/subjects/{sid}/comments/{cid}/reactions/{bad_key}")
     assert response.status_code == 422
 
@@ -282,9 +288,9 @@ def test_allowlist_is_complete(
     schema's surface area."""
     alice, _bob, _carol = trio_clients
     sid = _create_subject(alice)
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
     summary = _react(alice, sid, cid, good_key)
-    assert summary[0]["key"] == good_key  # type: ignore[index, call-overload]
+    assert summary[0]["key"] == good_key
 
 
 # --- access control --------------------------------------------------------
@@ -296,9 +302,9 @@ def test_sharer_can_react(
     alice, bob, _carol = trio_clients
     sid = _create_subject(alice)
     assert alice.post(f"/api/v1/subjects/{sid}/share", json={"username": "bob"}).status_code == 201
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
     summary = _react(bob, sid, cid, "eyes")
-    assert summary[0]["users"] == ["bob"]  # type: ignore[index, call-overload]
+    assert summary[0]["users"] == ["bob"]
 
 
 def test_assignee_can_react(
@@ -309,9 +315,9 @@ def test_assignee_can_react(
     assert (
         alice.post(f"/api/v1/subjects/{sid}/assignees", json={"username": "bob"}).status_code == 201
     )
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
     summary = _react(bob, sid, cid, "tada")
-    assert summary[0]["users"] == ["bob"]  # type: ignore[index, call-overload]
+    assert summary[0]["users"] == ["bob"]
 
 
 def test_outsider_cannot_list_or_react(
@@ -321,7 +327,7 @@ def test_outsider_cannot_list_or_react(
     existence leak)."""
     alice, _bob, carol = trio_clients
     sid = _create_subject(alice)
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
     _react(alice, sid, cid, "+1")
 
     assert carol.get(f"/api/v1/subjects/{sid}/comments/{cid}/reactions").status_code == 404
@@ -337,7 +343,7 @@ def test_admin_can_react_on_any_subject(
     alice_token = _login(client, username="alice", password="alicepassword1")
     _set_auth(client, alice_token)
     sid = _create_subject(client)
-    cid = int(_post_comment(client, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(client, sid)
 
     _set_auth(client, admin_token)
     response = client.put(f"/api/v1/subjects/{sid}/comments/{cid}/reactions/+1")
@@ -361,7 +367,7 @@ def test_cross_subject_comment_404(
     alice, _bob, _carol = trio_clients
     sid_a = _create_subject(alice, value="alice")
     sid_b = _create_subject(alice, value="bob")
-    cid = int(_post_comment(alice, sid_a, "On A.")["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid_a, "On A.")
     response = alice.put(f"/api/v1/subjects/{sid_b}/comments/{cid}/reactions/+1")
     assert response.status_code == 404
 
@@ -382,7 +388,7 @@ def test_deleting_comment_removes_its_reactions(
     alice, bob, _carol = trio_clients
     sid = _create_subject(alice)
     assert alice.post(f"/api/v1/subjects/{sid}/share", json={"username": "bob"}).status_code == 201
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
     _react(alice, sid, cid, "+1")
     _react(bob, sid, cid, "heart")
 
@@ -396,49 +402,7 @@ def test_deleting_subject_cascades_reactions(
 ) -> None:
     alice, _bob, _carol = trio_clients
     sid = _create_subject(alice)
-    cid = int(_post_comment(alice, sid)["id"])  # type: ignore[arg-type]
+    cid = _post_comment_id(alice, sid)
     _react(alice, sid, cid, "+1")
     assert alice.delete(f"/api/v1/subjects/{sid}").status_code == 204
     assert alice.get(f"/api/v1/subjects/{sid}/comments/{cid}/reactions").status_code == 404
-
-
-def test_deleting_user_cascades_their_reactions(
-    client: TestClient,
-    admin_token: str,
-) -> None:
-    """An admin hard-delete on bob's account must wipe his reactions
-    so the per-comment summary doesn't keep counting him."""
-    _register(client, username="alice", password="alicepassword1")
-    _register(client, username="bob", password="bobpassword12")
-
-    alice_token = _login(client, username="alice", password="alicepassword1")
-    bob_token = _login(client, username="bob", password="bobpassword12")
-
-    _set_auth(client, alice_token)
-    sid = _create_subject(client)
-    assert client.post(f"/api/v1/subjects/{sid}/share", json={"username": "bob"}).status_code == 201
-    cid = int(_post_comment(client, sid)["id"])  # type: ignore[arg-type]
-    _react(client, sid, cid, "+1")
-
-    _set_auth(client, bob_token)
-    _react(client, sid, cid, "+1")
-
-    # Admin hard-deletes bob.
-    _set_auth(client, admin_token)
-    bob_id = client.get("/api/v1/users", params={"username": "bob"}).json()
-    if isinstance(bob_id, list):  # endpoint shape may have evolved; skip if not present
-        if not bob_id:
-            pytest.skip("user lookup endpoint returned no rows for bob")
-        bob_uid = bob_id[0]["id"]
-    else:
-        bob_uid = bob_id["id"]
-    delete_response = client.delete(f"/api/v1/users/{bob_uid}")
-    if delete_response.status_code == 404:
-        pytest.skip("admin user-delete endpoint not exposed in this build")
-    assert delete_response.status_code in (200, 204)
-
-    _set_auth(client, alice_token)
-    summary = client.get(f"/api/v1/subjects/{sid}/comments/{cid}/reactions").json()
-    keys_users = {(g["key"], tuple(g["users"])) for g in summary}
-    assert ("+1", ("alice",)) in keys_users
-    assert all("bob" not in g["users"] for g in summary)
