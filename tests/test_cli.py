@@ -269,6 +269,54 @@ def test_show_html_format(runner: CliRunner, tmp_path: Path) -> None:
     assert saved_id in show_result.stdout
 
 
+def test_investigate_with_archive_flag(runner: CliRunner) -> None:
+    snap = "https://web.archive.org/web/2026/https://fake/alice"
+
+    class _FakeArchiver:
+        async def archive(self, source_url: str) -> str | None:
+            return snap
+
+        async def aclose(self) -> None:
+            return None
+
+    with (
+        patch("reckora.cli._build_orchestrator") as build_orch,
+        patch("reckora.cli.WaybackArchiver", return_value=_FakeArchiver()),
+    ):
+        from reckora.orchestrator import Orchestrator
+
+        build_orch.return_value = Orchestrator([_FakeCollector()])
+        result = runner.invoke(
+            app,
+            [
+                "investigate",
+                "alice",
+                "--kind",
+                "username",
+                "--archive",
+                "--format",
+                "json",
+            ],
+        )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["traces"][0]["evidence"]["archive_url"] == snap
+
+
+def test_investigate_without_archive_flag_skips_archiving(runner: CliRunner) -> None:
+    with patch("reckora.cli._build_orchestrator") as build_orch:
+        from reckora.orchestrator import Orchestrator
+
+        build_orch.return_value = Orchestrator([_FakeCollector()])
+        result = runner.invoke(
+            app,
+            ["investigate", "alice", "--kind", "username", "--format", "json"],
+        )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["traces"][0]["evidence"]["archive_url"] is None
+
+
 def test_kind_enum_round_trip() -> None:
     assert IdentifierType("username") is IdentifierType.USERNAME
     assert IdentifierType("domain") is IdentifierType.DOMAIN

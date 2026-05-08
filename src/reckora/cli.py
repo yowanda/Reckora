@@ -13,6 +13,7 @@ from .collectors.github_api import GitHubCollector
 from .collectors.web_profile import WebProfileCollector
 from .collectors.whois_rdap import WhoisRdapCollector
 from .config import settings
+from .evidence.archive import Archiver, WaybackArchiver
 from .models.entity import Edge, Identifier, Subject, Trace
 from .models.enums import IdentifierType
 from .orchestrator import Orchestrator
@@ -103,11 +104,13 @@ async def _run(
     seed: Identifier,
     extras: list[Identifier],
     use_ai: bool,
+    archiver: Archiver | None = None,
 ) -> tuple[Subject, list[Trace], list[Edge], str | None, str | None]:
     orchestrator = _build_orchestrator()
     subject, traces, edges = await orchestrator.investigate(
         seed,
         extra_identifiers=extras,
+        archiver=archiver,
     )
 
     summary_md: str | None = None
@@ -182,6 +185,16 @@ def investigate(
             help="SQLite database path (defaults to RECKORA_DB_PATH or ./reckora.db).",
         ),
     ] = None,
+    archive: Annotated[
+        bool,
+        typer.Option(
+            "--archive",
+            help=(
+                "Mint a Wayback Machine snapshot for each evidence URL "
+                "(best-effort, slow; off by default)."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Run a Reckora investigation against a seed Identifier."""
     seed = _identifier_from(value, kind)
@@ -192,7 +205,17 @@ def investigate(
         k, v = raw.split(":", 1)
         extras.append(_identifier_from(v, k))
 
-    subject, traces, edges, summary_md, hypotheses_md = asyncio.run(_run(seed, extras, ai))
+    archiver: Archiver | None = WaybackArchiver() if archive else None
+
+    async def _go() -> tuple[Subject, list[Trace], list[Edge], str | None, str | None]:
+        try:
+            return await _run(seed, extras, ai, archiver=archiver)
+        finally:
+            close = getattr(archiver, "aclose", None)
+            if close is not None:
+                await close()
+
+    subject, traces, edges, summary_md, hypotheses_md = asyncio.run(_go())
 
     if save:
         with SQLiteSubjectRepository(db or settings.db_path) as repo:

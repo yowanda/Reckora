@@ -10,7 +10,7 @@ The 10 layers of the Reckora vision and where each one lives in the codebase.
 | 4 | Correlation | done (rule-based) | Rules: `username_mutation`, `avatar_phash`, `timezone_overlap`, `bio_similarity`. Probabilistic-OR fusion. Embedding-based bio similarity (`sentence-transformers`) — Phase 3. |
 | 5 | AI Reasoning | done | Async OpenAI client with `summarize` and `hypothesize`. Prompt forbids invented facts and requires `ev:<8-hex>` citations. Anomaly detector — Phase 3. |
 | 6 | Confidence Scoring | done | Per-edge `confidence: float [0, 1]`, `reasons[]`, `supporting_evidence[]` (payload SHAs). |
-| 7 | Evidence Chain | partial | Source URL + timestamp + SHA-256 of canonicalised payload. Screenshot capture and archive.org snapshot — Phase 2. |
+| 7 | Evidence Chain | partial | Source URL + timestamp + SHA-256 of canonicalised payload, plus optional Wayback Machine `archive_url` per trace via `reckora investigate --archive`. Screenshot capture — Phase 2. |
 | 8 | Graph | done (in-process) | NetworkX `MultiDiGraph[str]`. Neo4j adapter — Phase 2. |
 | 9 | Reporting | partial | JSON + Markdown + self-contained HTML dossier, persisted to SQLite via `reckora list` / `reckora show`. PDF dossier and timeline reconstruction — Phase 2. |
 | 10 | Web UI | not yet | CLI only. Dashboard / graph viewer / report viewer — Phase 2. |
@@ -18,7 +18,7 @@ The 10 layers of the Reckora vision and where each one lives in the codebase.
 ## Phase plan
 
 - **Phase 1 — MVP skeleton**: entity-first data model, evidence chain, three collectors, rule-based correlation engine, evidence-bounded AI reasoning, CLI dossier, CI matrix on Python 3.11 + 3.12.
-- **Phase 2 — Persistence & UI**: SQLite storage behind a repository seam (in progress — `reckora.persistence.SubjectRepository` with a SQLite implementation, `reckora investigate --save`, `reckora list / show / delete`); self-contained HTML dossier (`--format html`, `.html` output) — landed; forensic screenshot capture, archive.org snapshot, PDF dossier, web UI with graph viewer, optional Neo4j adapter — pending.
+- **Phase 2 — Persistence & UI**: SQLite storage behind a repository seam (`reckora.persistence.SubjectRepository`, `reckora investigate --save`, `reckora list / show / delete`) — landed; self-contained HTML dossier (`--format html`, `.html` output) — landed; archive.org / Wayback snapshot per evidence URL (`reckora investigate --archive`, `Evidence.archive_url`) — landed; forensic screenshot capture, PDF dossier, web UI with graph viewer, optional Neo4j adapter — pending.
 - **Phase 3 — Sensor expansion**: phone collector, crypto wallet collector (Etherscan / Blockstream), `sentence-transformers` bio embeddings, anomaly detector, breach lookup behind a feature flag.
 - **Phase 4 — Autonomous agents**: hypothesis-driven recursive identifier expansion gated by confidence floors, AI-proposed collector plans verified by rule-based engines.
 - **Phase 5 — Collaborative platform**: multi-user investigations, shared evidence library, role-based reporting.

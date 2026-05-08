@@ -38,6 +38,8 @@ def to_dossier_md(
             short = t.evidence.payload_sha256[:16]
             lines.append(f"- evidence: `{short}…` (fetched {t.evidence.fetched_at.isoformat()})")
             lines.append(f"- source: {t.evidence.source_url}")
+            if t.evidence.archive_url:
+                lines.append(f"- archive: {t.evidence.archive_url}")
             for k, v in t.fields.items():
                 if v in (None, "", []):
                     continue

@@ -72,6 +72,22 @@ def test_html_renders_traces_with_evidence_hash() -> None:
     assert "researcher" in html
 
 
+def test_html_renders_archive_url_when_present() -> None:
+    subject, traces, edges = _build_dossier()
+    snap = "https://web.archive.org/web/2026/https://api.github.com/users/alice"
+    augmented = [
+        traces[0].model_copy(
+            update={"evidence": traces[0].evidence.model_copy(update={"archive_url": snap})}
+        ),
+        traces[1],
+    ]
+    html_with = to_dossier_html(subject=subject, traces=augmented, edges=edges)
+    html_without = to_dossier_html(subject=subject, traces=traces, edges=edges)
+    assert ">archive<" in html_with
+    assert snap in html_with
+    assert ">archive<" not in html_without
+
+
 def test_html_skips_empty_field_values() -> None:
     subject, traces, edges = _build_dossier()
     html = to_dossier_html(subject=subject, traces=traces, edges=edges)
