@@ -45,9 +45,7 @@ async def test_extracts_og_tags(httpx_mock: HTTPXMock, alice_url: Identifier) ->
     assert trace.fields["og_type"] == "profile"
 
 
-async def test_falls_back_to_title_when_no_og(
-    httpx_mock: HTTPXMock, alice_url: Identifier
-) -> None:
+async def test_falls_back_to_title_when_no_og(httpx_mock: HTTPXMock, alice_url: Identifier) -> None:
     body = "<html><head><title>Alice on Example</title></head><body></body></html>"
     httpx_mock.add_response(url=alice_url.value, text=body, status_code=200)
     async with httpx.AsyncClient() as client:

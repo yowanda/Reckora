@@ -16,9 +16,7 @@ def example_domain() -> Identifier:
     return Identifier(type=IdentifierType.DOMAIN, value="example.com")
 
 
-async def test_collect_404_returns_empty(
-    httpx_mock: HTTPXMock, example_domain: Identifier
-) -> None:
+async def test_collect_404_returns_empty(httpx_mock: HTTPXMock, example_domain: Identifier) -> None:
     httpx_mock.add_response(
         url=f"{RDAP_DOMAIN_BASE}/example.com",
         status_code=404,
@@ -29,9 +27,7 @@ async def test_collect_404_returns_empty(
     assert traces == []
 
 
-async def test_collect_normalises_rdap(
-    httpx_mock: HTTPXMock, example_domain: Identifier
-) -> None:
+async def test_collect_normalises_rdap(httpx_mock: HTTPXMock, example_domain: Identifier) -> None:
     httpx_mock.add_response(
         url=f"{RDAP_DOMAIN_BASE}/example.com",
         json={
