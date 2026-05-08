@@ -368,6 +368,63 @@ row (`keep_raw=False`) — only the SHA-256 of the canonicalised payload
 is preserved, so the chain stays auditable without bloating the saved
 dossier with multi-thousand-element `submitted` arrays.
 
+## Keybase usernames
+
+Alongside GitHub and Hacker News, Reckora ships a `KeybaseCollector`
+that resolves a `username` Identifier against the public
+[Keybase user-lookup endpoint](https://keybase.io/docs/api/1.0/call/user/lookup)
+at `https://keybase.io/_/api/1.0/user/lookup.json?usernames={id}` — no
+API key, no registration, just the same anonymous read-only endpoint
+the public `keybase` CLI hits for `keybase id <user>`. The collector
+is wired into the default orchestrator (CLI and HTTP API) so any seed
+of `--kind username` that matches a Keybase account triggers it
+automatically.
+
+```bash
+reckora investigate chrisco --kind username
+```
+
+Keybase is a high-signal collector for OSINT correlation because the
+platform is itself an *aggregator* of identity proofs: a single
+Keybase profile typically links a Twitter handle, GitHub account,
+Reddit account, one or more DNS-based domain proofs, and a PGP public
+key, all signed by the same device key. Surfacing those linked
+accounts as a structured `proofs` array lets the correlation engine
+pivot from one identifier to another without ever scraping a profile
+page.
+
+The emitted trace normalises to a flat schema the dossier renderers
+can read without parsing the raw envelope at render time: `platform`
+(`"keybase"`), `username` (server-canonical lowercase form, falls back
+to the requested value), `profile_url` (`https://keybase.io/<username>`),
+`display_name`, `bio`, `location`, `created_at` (ISO-8601 UTC, lifted
+from the `ctime` epoch), `proofs` (list of
+`{platform, identity, url}` for every *currently-live* identity proof
+— pending, revoked or permanently failed proofs are filtered out so
+they never feed correlation), `has_pgp_key` plus `pgp_fingerprint`
+when the account has published a primary key, and `is_active` — true
+if Keybase sees any verified identity signal (live proof, PGP key, or
+filled-out profile), false for accounts that registered but never
+linked anything.
+
+The collector silently no-ops on `username` strings whose shape can't
+match a Keybase account (Keybase allows 2–16 characters of
+`[A-Za-z0-9_]`, no hyphens), so it coexists with the GitHub / HN
+collectors and the wallet collectors that ride on
+`IdentifierType.WALLET`. Casing drift in the seed is normalised before
+the round-trip — Keybase canonicalises every username to lowercase
+server-side, but the `usernames=` query parameter is *case-sensitive*
+in the validation step and would otherwise return a silent
+`INPUT_ERROR`. Lookup misses are reported by Keybase through
+`status.code != 0` (typically `100` = `INPUT_ERROR`) **and** through a
+literal `null` entry inside the `them[]` array even when the envelope
+is OK — the collector treats both signals the same way the GitHub /
+HN collectors treat a 404. The raw HTTP envelope is **never** inlined
+into the evidence row (`keep_raw=False`) — only the SHA-256 of the
+canonicalised payload is preserved, so the chain stays auditable
+without bloating the saved dossier with multi-KB device chains and
+public-key bundles.
+
 ## Phone identifiers
 
 Phone numbers are first-class identifiers. The bundled `PhoneCollector` is

@@ -18,6 +18,7 @@ from reckora.collectors.avatar import AvatarCollector
 from reckora.collectors.email import EmailCollector
 from reckora.collectors.github_api import GitHubCollector
 from reckora.collectors.hackernews import HackerNewsCollector
+from reckora.collectors.keybase import KeybaseCollector
 from reckora.collectors.phone import PhoneCollector
 from reckora.collectors.reddit import RedditCollector
 from reckora.collectors.wallet_btc import BitcoinChainCollector
@@ -42,6 +43,7 @@ def _default_orchestrator_factory() -> Orchestrator:
         [
             GitHubCollector(token=engine_settings.github_token),
             HackerNewsCollector(),
+            KeybaseCollector(),
             RedditCollector(),
             WhoisRdapCollector(),
             WebProfileCollector(),
