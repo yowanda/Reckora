@@ -210,6 +210,48 @@ treated as no-ops; quota / rate-limit responses are surfaced upstream
 so the orchestrator's per-collector logger records them once and the
 investigation continues without this collector's data.
 
+## Avatar identifiers
+
+The bundled `AvatarCollector` resolves an `IdentifierType.AVATAR` whose
+value is an `http(s)://` image URL — fetching the bytes, decoding via
+Pillow, and computing the perceptual-hash family the correlation
+engine's `avatar_phash` rule already consumes. Until now nothing wrote
+that field; this collector closes the loop so a profile picture URL
+shared across two subjects produces a `same_avatar` edge automatically.
+
+```bash
+reckora investigate "https://avatars.githubusercontent.com/u/583231?v=4" --kind avatar
+```
+
+The emitted trace normalises to a flat schema the dossier renderers can
+read without parsing the raw envelope at render time:
+`url`, `content_type` (server-reported MIME, lower-cased and stripped
+of any parameters), `bytes_size`, `bytes_sha256` (content-hash of the
+raw bytes — distinct from the evidence chain's payload SHA so dossiers
+can dedupe identical avatars across subjects), `width`, `height`,
+`mode` (Pillow's `RGB` / `RGBA` / `L` / `P` / …), `format` (`PNG` /
+`JPEG` / `GIF` / …), `avatar_phash` (64-bit dHash hex — the field the
+existing `avatar_phash` correlation rule reads),
+`avatar_phash_perceptual` (DCT-based pHash, more robust to recolouring
+/ global brightness shifts; surfaced in the dossier today and reserved
+for future correlation rules), `avatar_ahash` (cheap average-hash
+sanity check), `is_active`.
+
+The collector silently no-ops on non-`http(s)` identifier values
+(`data:` URIs, raw paths, unsupported schemes), 4xx responses (typo'd
+URL, hot-link block, deleted avatar, auth-walled image — the absence
+of an avatar is itself an intelligence finding rather than a
+collection failure), non-`image/*` content-types (an HTML 200 from a
+paywall / redirect to login), bytes Pillow refuses to decode, and
+bodies larger than the configurable 5 MiB cap (so a malicious server
+can't OOM the host). 5xx responses are surfaced upstream so the
+orchestrator's per-collector logger records them once.
+
+The raw image bytes are **never** inlined into the evidence row
+(`keep_raw=False`) — only the SHA-256 of the canonicalised normalised
+payload is preserved, so the chain stays auditable without bloating
+the saved dossier with binary blobs.
+
 ## Phone identifiers
 
 Phone numbers are first-class identifiers. The bundled `PhoneCollector` is

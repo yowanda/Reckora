@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from reckora.collectors.avatar import AvatarCollector
 from reckora.collectors.github_api import GitHubCollector
 from reckora.collectors.phone import PhoneCollector
 from reckora.collectors.wallet_btc import BitcoinChainCollector
@@ -38,6 +39,7 @@ def _default_orchestrator_factory() -> Orchestrator:
             PhoneCollector(),
             BitcoinChainCollector(),
             EthereumChainCollector(api_key=engine_settings.etherscan_api_key),
+            AvatarCollector(),
         ]
     )
 
