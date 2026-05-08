@@ -19,6 +19,10 @@ reckora investigate https://github.com/octocat --kind url --output dossier.md
 
 Set `OPENAI_API_KEY` to enable `--ai`.
 
+## Roadmap
+
+See [ROADMAP.md](./ROADMAP.md).
+
 ## License
 
 [MIT](./LICENSE)
