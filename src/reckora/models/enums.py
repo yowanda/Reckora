@@ -33,6 +33,8 @@ class TraceSource(StrEnum):
     WALLET_ETHERSCAN = "wallet_etherscan"
     WALLET_SOLANA = "wallet_solana"
     AVATAR_HTTP = "avatar_http"
+    EMAIL_PROFILE = "email_profile"
+    REDDIT_PROFILE = "reddit_profile"
     USER_PROVIDED = "user_provided"
 
 
