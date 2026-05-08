@@ -227,14 +227,62 @@ float drift), `outgoing_tx_count` (account nonce — exactly the number
 of external txs the EOA has originated), `is_active`.
 
 The collector silently no-ops on `wallet` strings that are not
-EVM-shaped (e.g. a Bitcoin address) so the BTC adapter and any future
-Solana / Cosmos collector can coexist on `IdentifierType.WALLET`. Two
-Etherscan endpoints (`account/balance` and
+EVM-shaped (e.g. a Bitcoin or Solana address) so the BTC and SOL
+adapters (plus any future Cosmos / TRON collector) coexist cleanly on
+`IdentifierType.WALLET`. Two Etherscan endpoints (`account/balance` and
 `proxy/eth_getTransactionCount`) are combined into a single Trace; the
 raw HTTP envelopes are dropped from evidence (`keep_raw=False`) and the
 SHA-256 of the canonicalised combined payload is preserved as the
 audit anchor. Etherscan's "Invalid address format" responses are
 treated as no-ops; quota / rate-limit responses are surfaced upstream
+so the orchestrator's per-collector logger records them once and the
+investigation continues without this collector's data.
+
+## Solana wallet identifiers
+
+Alongside Bitcoin and Ethereum, Reckora ships a `SolanaChainCollector`
+that resolves a `wallet` identifier against the public Solana mainnet-beta
+JSON-RPC at `https://api.mainnet-beta.solana.com` — no API key, no
+registration, just the anonymous public RPC tier. The collector is wired
+into the default orchestrator (CLI and HTTP API) so any seed of
+`--kind wallet` whose base58 form decodes to a 32-byte ed25519 public
+key triggers it automatically.
+
+```bash
+# System program (the canonical "all-zero" Solana account):
+reckora investigate "11111111111111111111111111111111" --kind wallet
+
+# Wrapped SOL mint:
+reckora investigate "So11111111111111111111111111111111111111112" --kind wallet
+```
+
+The emitted trace normalises to a flat schema the dossier renderers can
+read without parsing the raw RPC envelope at render time:
+`address` (original on-chain string — base58 is case-sensitive so the
+original casing is preserved verbatim, unlike EVM hex), `chain`
+(`"solana"`), `network` (`"mainnet"`), `address_format` (`"ed25519"`
+— shared across every Solana account so a future devnet / testnet
+adapter can reuse the schema unchanged), `balance_lamports` (int) and
+`balance_sol` (string-formatted with full 9-decimal precision, no
+float drift), `latest_signature` plus `latest_signature_block_time`
+and `latest_signature_at` (ISO-8601 UTC) for the most recent
+transaction touching the account, and `is_active` — True iff the
+balance is positive **or** the account has ever appeared in a
+confirmed signature, so a fully-drained address still surfaces as
+formerly-active rather than vanishing from the dossier.
+
+The shape check is a tiny pure-Python base58 decoder that requires the
+decoded payload to be **exactly 32 bytes**. That cleanly excludes
+Bitcoin legacy / P2SH addresses (25 bytes) without resorting to length
+heuristics, so the BTC, EVM, and SOL collectors stay in their own
+lanes on `IdentifierType.WALLET`. Two RPC methods (`getBalance` and
+`getSignaturesForAddress` with `limit=1`) are combined into a single
+Trace; the raw JSON-RPC envelopes are dropped from evidence
+(`keep_raw=False`) and the SHA-256 of the canonicalised combined
+payload is preserved as the audit anchor. RPC error `-32602` (invalid
+param: WrongSize / decode failure) is treated as a no-op so the
+orchestrator's per-collector try/except never has to swallow a 4xx;
+any other RPC error code, plus 5xx responses, are surfaced upstream
 so the orchestrator's per-collector logger records them once and the
 investigation continues without this collector's data.
 
