@@ -38,6 +38,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "reportlab>=4.0",
     "phonenumbers>=8.13",
+    "dnspython>=2.8.0",
 ]
 
 [project.optional-dependencies]
