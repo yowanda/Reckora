@@ -36,6 +36,10 @@ def test_dossier_dict_round_trips_via_json(
     assert len(payload["timeline"]) == 2
     timestamps = [entry["timestamp"] for entry in payload["timeline"]]
     assert timestamps == sorted(timestamps)
+    # The two fixtures intentionally carry divergent display names
+    # ("Alice A" vs "alice"), so the anomaly detector picks that up.
+    assert len(payload["anomalies"]) == 1
+    assert payload["anomalies"][0]["kind"] == "name_divergence"
     assert payload["ai"] == {"summary": None, "hypotheses": None}
 
 
@@ -57,12 +61,14 @@ def test_dossier_md_contains_key_sections(
     assert "## Identifiers" in md
     assert "## Traces" in md
     assert "## Timeline" in md
+    assert "## Anomalies" in md
     assert "## Correlation edges" in md
     assert "## AI summary" in md
     assert "Likely the same person." in md
     assert "## AI hypotheses" in md
-    # Timeline appears after Traces and before Correlation edges.
+    # Timeline and Anomalies both appear after Traces and before Correlation edges.
     assert md.index("## Traces") < md.index("## Timeline") < md.index("## Correlation edges")
+    assert md.index("## Traces") < md.index("## Anomalies") < md.index("## Correlation edges")
 
 
 def test_dossier_md_handles_no_traces() -> None:
@@ -71,5 +77,6 @@ def test_dossier_md_handles_no_traces() -> None:
     md = to_dossier_md(subject=subject, traces=[], edges=[])
     assert "_no traces_" in md
     assert "_no events_" in md
+    assert "_no anomalies detected_" in md
     assert "_no edges_" in md
     assert "## AI summary" not in md

@@ -29,6 +29,7 @@ def test_create_investigation_runs_orchestrator_and_persists(
     assert len(body["traces"]) == 1
     assert len(body["timeline"]) == 1
     assert body["timeline"][0]["identifier_value"] == "alice"
+    assert body["anomalies"] == []
     assert body["subject"]["seed_identifier"]["value"] == "alice"
 
     listed = authed_client.get("/api/v1/subjects").json()
@@ -205,6 +206,7 @@ def test_get_subject_returns_full_dossier(authed_client: TestClient) -> None:
     assert fetched["id"] == created["id"]
     assert fetched["traces"] == created["traces"]
     assert fetched["timeline"] == created["timeline"]
+    assert fetched["anomalies"] == created["anomalies"]
     assert fetched["subject"] == created["subject"]
 
 
@@ -241,6 +243,7 @@ def test_get_subject_dossier_markdown(authed_client: TestClient) -> None:
     assert "text/markdown" in response.headers["content-type"]
     assert "# Reckora dossier" in response.text
     assert "## Timeline" in response.text
+    assert "## Anomalies" in response.text
 
 
 def test_get_subject_dossier_json(authed_client: TestClient) -> None:
@@ -257,6 +260,8 @@ def test_get_subject_dossier_json(authed_client: TestClient) -> None:
     assert body["subject"]["seed_identifier"]["value"] == "alice"
     assert "timeline" in body
     assert body["timeline"][0]["identifier_value"] == "alice"
+    assert "anomalies" in body
+    assert body["anomalies"] == []
 
 
 def test_get_subject_dossier_pdf(authed_client: TestClient) -> None:

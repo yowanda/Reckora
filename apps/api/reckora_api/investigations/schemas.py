@@ -77,5 +77,6 @@ class SavedDossierPayload(BaseModel):
     subject: dict[str, Any]
     traces: list[dict[str, Any]]
     timeline: list[dict[str, Any]]
+    anomalies: list[dict[str, Any]]
     edges: list[dict[str, Any]]
     ai: dict[str, Any]

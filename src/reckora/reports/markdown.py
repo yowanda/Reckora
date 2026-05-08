@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from ..anomaly import detect_anomalies
 from ..models.entity import Edge, Subject, Trace
 from .timeline import build_timeline
 
@@ -64,6 +65,19 @@ def to_dossier_md(
             )
     else:
         lines.append("_no events_")
+    lines.append("")
+
+    lines.append("## Anomalies")
+    anomalies = detect_anomalies(traces)
+    if anomalies:
+        for a in anomalies:
+            short_refs = [sha[:16] for sha in a.supporting_evidence]
+            evidence = " ".join(f"`{s}…`" for s in short_refs)
+            lines.append(
+                f"- **{a.severity.value.upper()}** · `{a.kind.value}` — {a.message} ({evidence})"
+            )
+    else:
+        lines.append("_no anomalies detected_")
     lines.append("")
 
     lines.append("## Correlation edges")
