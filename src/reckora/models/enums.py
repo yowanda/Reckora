@@ -31,6 +31,7 @@ class TraceSource(StrEnum):
     BREACH_HIBP = "breach_hibp"
     WALLET_BLOCKSTREAM = "wallet_blockstream"
     WALLET_ETHERSCAN = "wallet_etherscan"
+    WALLET_SOLANA = "wallet_solana"
     AVATAR_HTTP = "avatar_http"
     USER_PROVIDED = "user_provided"
 
