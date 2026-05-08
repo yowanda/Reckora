@@ -1,0 +1,83 @@
+"""FastAPI application factory.
+
+The factory pattern keeps the app construction explicit so tests can build a
+fresh app per case (with isolated SQLite paths and JWT secrets) and the CLI
+can pass a fully-resolved :class:`APISettings`.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from reckora.collectors.github_api import GitHubCollector
+from reckora.collectors.web_profile import WebProfileCollector
+from reckora.collectors.whois_rdap import WhoisRdapCollector
+from reckora.config import settings as engine_settings
+from reckora.orchestrator import Orchestrator
+from reckora.persistence.sqlite import SQLiteSubjectRepository
+from reckora_api.auth.repository import UserRepository
+from reckora_api.auth.routes import router as auth_router
+from reckora_api.config import APISettings
+from reckora_api.investigations.routes import router as investigations_router
+
+
+def _default_orchestrator_factory() -> Orchestrator:
+    return Orchestrator(
+        [
+            GitHubCollector(token=engine_settings.github_token),
+            WhoisRdapCollector(),
+            WebProfileCollector(),
+        ]
+    )
+
+
+def create_app(
+    settings: APISettings | None = None,
+    *,
+    orchestrator_factory: Callable[[], Orchestrator] | None = None,
+) -> FastAPI:
+    """Build a Reckora FastAPI app.
+
+    Tests pass ``settings`` with an ephemeral ``db_path`` and a random
+    ``jwt_secret`` so they don't have to depend on environment state.
+    """
+    s = settings or APISettings()
+    if not s.jwt_secret:
+        raise RuntimeError(
+            "RECKORA_API_JWT_SECRET must be set; refusing to start with an empty secret"
+        )
+
+    app = FastAPI(
+        title="Reckora API",
+        version="0.1.0",
+        description="HTTP API for the Reckora OSINT investigation engine.",
+        docs_url="/docs" if s.docs_enabled else None,
+        redoc_url="/redoc" if s.docs_enabled else None,
+        openapi_url="/openapi.json" if s.docs_enabled else None,
+    )
+
+    app.state.settings = s
+    app.state.user_repo = UserRepository(s.db_path)
+    app.state.subject_repo = SQLiteSubjectRepository(s.db_path)
+    app.state.orchestrator_factory = orchestrator_factory or _default_orchestrator_factory
+
+    if s.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=s.cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+    app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(investigations_router, prefix="/api/v1")
+
+    @app.get("/healthz", tags=["meta"])
+    def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    return app
