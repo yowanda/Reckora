@@ -77,7 +77,17 @@ export interface paths {
          */
         get: operations["list_users_api_v1_users_get"];
         put?: never;
-        post?: never;
+        /**
+         * Admin Create User
+         * @description Admin-only direct creation of a user with a chosen role.
+         *
+         *     Distinct from ``POST /auth/register`` (self-service, always viewer) so
+         *     an operator can provision a member account without first asking that
+         *     user to register and then promoting them. Defaults to ``viewer`` role
+         *     if the body omits it, since member-provisioning is the dominant use
+         *     case.
+         */
+        post: operations["admin_create_user_api_v1_users_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1633,6 +1643,22 @@ export interface components {
             unread_comment_count: number;
         };
         /**
+         * UserAdminCreate
+         * @description Body for ``POST /api/v1/users`` (admin only).
+         *
+         *     Mirrors :class:`UserCreate` but takes a ``role`` so an admin can directly
+         *     provision either an admin or a viewer without having the new user
+         *     self-register first and then promoting them with a second request.
+         */
+        UserAdminCreate: {
+            /** Username */
+            username: string;
+            /** Password */
+            password: string;
+            /** @default viewer */
+            role: components["schemas"]["Role"];
+        };
+        /**
          * UserCreate
          * @description Body for ``POST /api/v1/auth/register``.
          */
@@ -1843,6 +1869,53 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    admin_create_user_api_v1_users_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserAdminCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserPublic"];
+                };
+            };
+            /** @description admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description username already taken */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

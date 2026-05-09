@@ -14,6 +14,7 @@ export function Layout() {
   const username =
     state.status === "authenticated" ? state.user.username : "anonymous";
   const role = state.status === "authenticated" ? state.user.role : "";
+  const isAdmin = role === "admin";
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -38,6 +39,11 @@ export function Layout() {
             <NavLink to="/me/watching" className={navLinkClass}>
               Watching
             </NavLink>
+            {isAdmin ? (
+              <NavLink to="/admin/members" className={navLinkClass}>
+                Members
+              </NavLink>
+            ) : null}
           </nav>
           <div className="ml-auto flex items-center gap-3 text-sm text-zinc-400">
             <span>

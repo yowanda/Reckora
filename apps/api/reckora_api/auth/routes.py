@@ -29,6 +29,7 @@ from reckora_api.auth.models import (
     Role,
     RoleUpdate,
     TokenResponse,
+    UserAdminCreate,
     UserCreate,
     UserPublic,
     UserRecord,
@@ -120,6 +121,41 @@ def list_users(
 ) -> list[UserPublic]:
     """Admin-only directory of every user (id, username, role, created_at)."""
     return [_to_public(r) for r in repo.list_users()]
+
+
+@users_router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    response_model=UserPublic,
+    responses={
+        403: {"description": "admin role required"},
+        409: {"description": "username already taken"},
+    },
+)
+def admin_create_user(
+    payload: UserAdminCreate,
+    _: Annotated[UserRecord, Depends(require_admin)],
+    repo: Annotated[UserRepository, Depends(get_user_repo)],
+) -> UserPublic:
+    """Admin-only direct creation of a user with a chosen role.
+
+    Distinct from ``POST /auth/register`` (self-service, always viewer) so
+    an operator can provision a member account without first asking that
+    user to register and then promoting them. Defaults to ``viewer`` role
+    if the body omits it, since member-provisioning is the dominant use
+    case.
+    """
+    if repo.get_by_username(payload.username) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="username already taken",
+        )
+    record = repo.create_user(
+        username=payload.username,
+        password_hash=hash_password(payload.password),
+        role=payload.role,
+    )
+    return _to_public(record)
 
 
 @users_router.patch(
