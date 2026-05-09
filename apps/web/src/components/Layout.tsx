@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 
 import { Breadcrumbs } from "./Breadcrumbs";
 import { CommandPalette } from "./CommandPalette";
@@ -8,6 +8,7 @@ import { Sidebar } from "./Sidebar";
 export function Layout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const location = useLocation();
 
   // ⌘K / Ctrl+K opens the command palette anywhere in the app, except
   // while the user is mid-typing in a multi-line text area (so we do
@@ -100,7 +101,10 @@ export function Layout() {
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 lg:px-6">
+        <main
+          key={location.pathname}
+          className="rk-page mx-auto w-full max-w-6xl flex-1 px-4 py-6 lg:px-6"
+        >
           <Outlet />
         </main>
       </div>

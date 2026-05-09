@@ -46,7 +46,7 @@ default, `8px` panels, `12px` modals.
 | **M3** | Forensic design tokens (Tailwind theme)                             | ✅ done | `tailwind.config.ts` + `index.css` — ink surfaces, cyan + amber accents, Inter/JetBrains Mono via Google Fonts, faint data grid backdrop, on-brand scrollbars. |
 | **M4** | Layout chrome: sidebar nav + breadcrumbs + global ⌘K command        | ✅ done | New `Sidebar` (logo, sectioned nav, footer with role badge + sign-out), sticky topbar with `Breadcrumbs` + Search button, `CommandPalette` modal (⌘K / Ctrl+K). Mobile drawer for the sidebar. |
 | **M5** | Page-by-page restyle                                                | ✅ done | Login (branded sign-in panel + ambient glow), Subjects (filter + kind chips), SubjectDetail (panel headers, monospaced ids, danger-toned delete), NewInvestigation (toggle cards w/ descriptions), Mentions / Pinned / Watching (shared `SavedDossierList`), Members (admin panel polish, role chip + live dot), and Phase 5 cards normalised onto the new ink/fg/accent/alert tokens. |
-| **M6** | Polish: empty states, skeletons, errors, motion                     | pending | |
+| **M6** | Polish: empty states, skeletons, errors, motion                     | ✅ done | New shimmer skeleton (accent sweep), empty states with hairline accent + dashed border, on-brand error toasts (ok/danger/info palette), forensic 404 page, page-transition fade-in. All animations gated by `prefers-reduced-motion`. |
 | **M7** | Rebuild + redeploy to VPS                                           | pending | `docker compose build && up -d`. |
 
 Status legend: ✅ done · ⏳ in progress · pending · ❌ blocked.

@@ -1,23 +1,37 @@
+/**
+ * Generic shimmer block. Used standalone for one-off placeholders and
+ * composed by `SkeletonList` for the standard list-page loading state.
+ *
+ * The animation lives in `index.css` (`@keyframes rk-shimmer`) and is
+ * driven by a moving accent gradient over the ink-subtle base, so the
+ * whole skeleton matches the forensic palette instead of clashing with
+ * the bright Tailwind default `animate-pulse`.
+ */
 export function Skeleton({ className = "" }: { className?: string }) {
   return (
     <div
       aria-hidden="true"
-      className={`animate-pulse rounded bg-zinc-800/60 ${className}`}
+      className={`rk-skeleton rounded ${className}`}
     />
   );
 }
 
 /**
- * A list of card-shaped skeletons for use in list pages while data loads.
- * Replaces the bare <Spinner> we used to show.
+ * Card-shaped skeleton row repeated `count` times. Used by every list
+ * page while React Query resolves so the page never collapses to a
+ * blank box.
  */
 export function SkeletonList({ count = 4 }: { count?: number }) {
   return (
-    <ul aria-busy="true" className="space-y-2">
+    <ul
+      aria-busy="true"
+      aria-live="polite"
+      className="space-y-2 motion-safe:animate-fade-in"
+    >
       {Array.from({ length: count }).map((_, idx) => (
         <li
           key={idx}
-          className="rounded border border-border bg-bg-panel p-3"
+          className="rounded-lg border border-ink-line bg-ink-panel p-3"
         >
           <div className="flex items-center gap-2">
             <Skeleton className="h-5 w-12" />

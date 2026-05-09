@@ -1,14 +1,14 @@
 export function Spinner({ label }: { label?: string }) {
   return (
     <div
-      className="inline-flex items-center gap-2 text-zinc-400 text-sm"
+      className="inline-flex items-center gap-2 text-sm text-fg-muted"
       role="status"
     >
       <span
-        className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-zinc-500 border-t-transparent"
+        className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-[1.5px] border-ink-line2 border-t-accent"
         aria-hidden="true"
       />
-      {label ?? "Loading…"}
+      <span>{label ?? "Loading…"}</span>
     </div>
   );
 }
