@@ -161,6 +161,7 @@ def _comment_to_entry(row: CommentRow, resolve: _UsernameCache) -> CommentEntry:
         body=row.body,
         created_at=datetime.fromisoformat(row.created_at),
         updated_at=None if row.updated_at is None else datetime.fromisoformat(row.updated_at),
+        parent_comment_id=row.parent_comment_id,
     )
 
 
@@ -253,14 +254,72 @@ def create_comment(
             status_code=422,
             detail="comment body must contain at least one non-whitespace character",
         )
+    if payload.parent_comment_id is not None:
+        parent = access_repo.get_comment(payload.parent_comment_id)
+        if parent is None or parent.subject_id != subject_id:
+            # Either the parent does not exist, or it lives on a different
+            # subject — either way we 404 to avoid leaking whether the id
+            # is valid in some other dossier the actor cannot see.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"no parent comment with id {payload.parent_comment_id} "
+                    f"on subject {subject_id!r}"
+                ),
+            )
+        if access_repo.is_reply(payload.parent_comment_id):
+            # Threads are flat: a reply cannot have replies. The UI is
+            # expected to nudge the user to reply to the *root* of the
+            # thread instead of the in-thread message.
+            raise HTTPException(
+                status_code=422,
+                detail="replies are one level deep; reply to the parent comment instead",
+            )
     row = access_repo.add_comment(
         subject_id,
         actor.id,
         body,
         created_at=datetime.now(UTC).isoformat(),
+        parent_comment_id=payload.parent_comment_id,
     )
     resolve = _UsernameCache(user_repo)
     return _comment_to_entry(row, resolve)
+
+
+@comments_router.get(
+    "/{comment_id}/replies",
+    response_model=list[CommentEntry],
+    responses={404: {"description": "subject or parent comment not found"}},
+)
+def list_replies(
+    subject_id: str,
+    comment_id: int,
+    actor: Annotated[UserRecord, Depends(current_user)],
+    subject_repo: Annotated[SubjectRepository, Depends(get_subject_repo)],
+    access_repo: Annotated[AccessRepository, Depends(get_access_repo)],
+    user_repo: Annotated[UserRepository, Depends(get_user_repo)],
+) -> list[CommentEntry]:
+    """List every reply to ``comment_id``, oldest first.
+
+    The parent comment must exist and live on ``subject_id`` —
+    cross-subject id smuggling 404s for the same reason ``DELETE``
+    does. Visibility is read-tier: any reader of the dossier can see
+    the reply thread.
+    """
+    _ensure_reader(
+        subject_id=subject_id,
+        actor=actor,
+        subject_repo=subject_repo,
+        access_repo=access_repo,
+    )
+    parent = access_repo.get_comment(comment_id)
+    if parent is None or parent.subject_id != subject_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no comment with id {comment_id} on subject {subject_id!r}",
+        )
+    resolve = _UsernameCache(user_repo)
+    return [_comment_to_entry(r, resolve) for r in access_repo.list_replies(comment_id)]
 
 
 @comments_router.delete(
