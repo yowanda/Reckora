@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "@/components/Layout";
 import { PrivateRoute } from "@/components/PrivateRoute";
 import { LoginPage } from "@/pages/Login";
+import { MembersPage } from "@/pages/Members";
 import { MentionsPage } from "@/pages/Mentions";
 import { NewInvestigationPage } from "@/pages/NewInvestigation";
 import { NotFoundPage } from "@/pages/NotFound";
@@ -27,6 +28,7 @@ export function App() {
           <Route path="me/mentions" element={<MentionsPage />} />
           <Route path="me/pins" element={<PinsPage />} />
           <Route path="me/watching" element={<WatchingPage />} />
+          <Route path="admin/members" element={<MembersPage />} />
         </Route>
       </Route>
       <Route path="*" element={<NotFoundPage />} />

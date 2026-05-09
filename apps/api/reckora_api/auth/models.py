@@ -65,6 +65,21 @@ class RoleUpdate(BaseModel):
     role: Role
 
 
+class UserAdminCreate(BaseModel):
+    """Body for ``POST /api/v1/users`` (admin only).
+
+    Mirrors :class:`UserCreate` but takes a ``role`` so an admin can directly
+    provision either an admin or a viewer without having the new user
+    self-register first and then promoting them with a second request.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(..., min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    password: str = Field(..., min_length=8, max_length=200)
+    role: Role = Role.VIEWER
+
+
 class UserRecord(BaseModel):
     """Internal user row; never returned to clients."""
 

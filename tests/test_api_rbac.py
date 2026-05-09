@@ -507,6 +507,80 @@ def test_admin_can_promote_and_demote(
     assert demoted.json()["role"] == "viewer"
 
 
+def test_admin_can_create_member_directly(
+    client: TestClient,
+    admin_token: str,
+) -> None:
+    """Admin POSTs to ``/users`` to provision a member without self-register.
+
+    Default role is ``viewer`` so the dominant "add a member" use case is a
+    one-line request body. The new account can then immediately log in.
+    """
+    _set_auth(client, admin_token)
+    response = client.post(
+        "/api/v1/users",
+        json={"username": "carol", "password": "carolpassword1"},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["username"] == "carol"
+    assert body["role"] == "viewer"
+    # New account can log in.
+    token = _login(client, username="carol", password="carolpassword1")
+    assert token
+
+
+def test_admin_can_create_admin_directly(
+    client: TestClient,
+    admin_token: str,
+) -> None:
+    _set_auth(client, admin_token)
+    response = client.post(
+        "/api/v1/users",
+        json={"username": "carol", "password": "carolpassword1", "role": "admin"},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["role"] == "admin"
+
+
+def test_admin_create_user_rejects_duplicate(
+    client: TestClient,
+    admin_token: str,
+) -> None:
+    _register(client, username="alice", password="alicepassword1")
+    _set_auth(client, admin_token)
+    response = client.post(
+        "/api/v1/users",
+        json={"username": "alice", "password": "anotherpassword1"},
+    )
+    assert response.status_code == 409
+
+
+def test_member_cannot_create_user(alice_client: TestClient) -> None:
+    response = alice_client.post(
+        "/api/v1/users",
+        json={"username": "carol", "password": "carolpassword1"},
+    )
+    assert response.status_code == 403
+
+
+def test_admin_create_user_validates_payload(
+    client: TestClient,
+    admin_token: str,
+) -> None:
+    _set_auth(client, admin_token)
+    bad_username = client.post(
+        "/api/v1/users",
+        json={"username": "no spaces!", "password": "carolpassword1"},
+    )
+    assert bad_username.status_code == 422
+    bad_password = client.post(
+        "/api/v1/users",
+        json={"username": "carol", "password": "short"},
+    )
+    assert bad_password.status_code == 422
+
+
 def test_admin_cannot_demote_self(
     client: TestClient,
     admin_token: str,
