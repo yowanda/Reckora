@@ -71,6 +71,11 @@ auth_app = typer.Typer(
 app.add_typer(auth_app, name="auth")
 
 
+_InvestigationResult = tuple[
+    Subject, list[Trace], list[Edge], str | None, str | None, Anchor | None
+]
+
+
 def _identifier_from(value: str, kind: str | None) -> Identifier:
     """Build an Identifier from a CLI ``value`` + optional ``--kind``.
 
@@ -483,9 +488,7 @@ def investigate(
         _build_screenshotter(screenshots_dir) if screenshot else None
     )
 
-    async def _go() -> (
-        tuple[Subject, list[Trace], list[Edge], str | None, str | None, Anchor | None]
-    ):
+    async def _go() -> _InvestigationResult:
         try:
             return await _run(
                 seed,
