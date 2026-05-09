@@ -90,6 +90,20 @@ CREATE TABLE IF NOT EXISTS subject_assignees(
 
 CREATE INDEX IF NOT EXISTS idx_subject_assignees_user
     ON subject_assignees(user_id);
+
+CREATE TABLE IF NOT EXISTS subject_notes(
+    subject_id TEXT NOT NULL
+        REFERENCES subjects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL
+        REFERENCES users(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_subject_notes_user
+    ON subject_notes(user_id, updated_at, subject_id);
 """
 
 
@@ -113,6 +127,21 @@ class AssigneeRow:
     user_id: int
     assigned_by: int | None
     assigned_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class NoteRow:
+    """One row in the per-actor :meth:`AccessRepository.get_note`.
+
+    Notes are private to ``user_id`` — a different actor reading
+    the same subject sees their own row (or no row at all).
+    """
+
+    subject_id: str
+    user_id: int
+    body: str
+    created_at: str
+    updated_at: str
 
 
 class AccessRepository:
@@ -293,6 +322,83 @@ class AccessRepository:
             (subject_id, user_id),
         ).fetchone()
         return row is not None
+
+    # -- private notes ---------------------------------------------------
+
+    def upsert_note(
+        self,
+        subject_id: str,
+        user_id: int,
+        body: str,
+        *,
+        now: str,
+    ) -> NoteRow:
+        """Create or replace ``user_id``'s private note on ``subject_id``.
+
+        On first write the ``created_at`` timestamp is set to ``now``;
+        on subsequent writes only ``updated_at`` advances. We store
+        both even though the wire shape only exposes ``updated_at``,
+        because the difference is useful for audit logs and future
+        "new vs edited" UI affordances.
+        """
+        existing = self._conn.execute(
+            """
+            SELECT created_at FROM subject_notes
+            WHERE subject_id = ? AND user_id = ?
+            """,
+            (subject_id, user_id),
+        ).fetchone()
+        created_at = existing[0] if existing is not None else now
+        self._conn.execute(
+            """
+            INSERT INTO subject_notes(
+                subject_id, user_id, body, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (subject_id, user_id) DO UPDATE SET
+                body = excluded.body,
+                updated_at = excluded.updated_at
+            """,
+            (subject_id, user_id, body, created_at, now),
+        )
+        self._conn.commit()
+        return NoteRow(
+            subject_id=subject_id,
+            user_id=user_id,
+            body=body,
+            created_at=created_at,
+            updated_at=now,
+        )
+
+    def get_note(self, subject_id: str, user_id: int) -> NoteRow | None:
+        """Return ``user_id``'s note on ``subject_id`` or ``None``."""
+        row = self._conn.execute(
+            """
+            SELECT subject_id, user_id, body, created_at, updated_at
+            FROM subject_notes
+            WHERE subject_id = ? AND user_id = ?
+            """,
+            (subject_id, user_id),
+        ).fetchone()
+        if row is None:
+            return None
+        sid, uid, body, created_at, updated_at = row
+        return NoteRow(
+            subject_id=str(sid),
+            user_id=int(uid),
+            body=str(body),
+            created_at=str(created_at),
+            updated_at=str(updated_at),
+        )
+
+    def delete_note(self, subject_id: str, user_id: int) -> bool:
+        """Drop ``user_id``'s note on ``subject_id``. Idempotent."""
+        cur = self._conn.execute(
+            "DELETE FROM subject_notes WHERE subject_id = ? AND user_id = ?",
+            (subject_id, user_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
 
     # -- comments ---------------------------------------------------------
 
