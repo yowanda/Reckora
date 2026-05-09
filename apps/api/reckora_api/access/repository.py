@@ -114,6 +114,32 @@ CREATE TABLE IF NOT EXISTS subject_assignees(
 CREATE INDEX IF NOT EXISTS idx_subject_assignees_user
     ON subject_assignees(user_id);
 
+CREATE TABLE IF NOT EXISTS subject_comment_replies(
+    comment_id INTEGER PRIMARY KEY
+        REFERENCES subject_comments(id) ON DELETE CASCADE,
+    parent_comment_id INTEGER NOT NULL
+        REFERENCES subject_comments(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_subject_comment_replies_parent
+    ON subject_comment_replies(parent_comment_id);
+
+CREATE TABLE IF NOT EXISTS comment_reactions(
+    comment_id INTEGER NOT NULL
+        REFERENCES subject_comments(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL
+        REFERENCES users(id) ON DELETE CASCADE,
+    reaction_key TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (comment_id, user_id, reaction_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_comment_reactions_comment
+    ON comment_reactions(comment_id);
+
+CREATE INDEX IF NOT EXISTS idx_comment_reactions_user
+    ON comment_reactions(user_id);
+
 CREATE TABLE IF NOT EXISTS subject_labels(
     subject_id TEXT NOT NULL
         REFERENCES subjects(id) ON DELETE CASCADE,
@@ -131,7 +157,14 @@ CREATE INDEX IF NOT EXISTS idx_subject_labels_label
 
 @dataclass(frozen=True, slots=True)
 class CommentRow:
-    """One row in :meth:`AccessRepository.list_comments` / :meth:`get_comment`."""
+    """One row in :meth:`AccessRepository.list_comments` / :meth:`get_comment`.
+
+    ``parent_comment_id`` is ``None`` for top-level comments and the id
+    of the parent comment for replies. Threading is one-level deep —
+    a comment that is itself a reply cannot be the parent of another
+    reply (the route layer enforces this; the schema permits it but
+    no path materialises that state).
+    """
 
     id: int
     subject_id: str
@@ -139,6 +172,7 @@ class CommentRow:
     body: str
     created_at: str
     updated_at: str | None
+    parent_comment_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +183,72 @@ class AssigneeRow:
     user_id: int
     assigned_by: int | None
     assigned_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ActivityRow:
+    """One event in :meth:`AccessRepository.list_activity`.
+
+    The activity feed is a chronological union over the four tables that
+    record observable mutations on a saved dossier: comments, assignees,
+    explicit shares, and the cross-trace anchor mint. We deliberately do
+    NOT model role flips or ownership transfers here — those live in
+    different layers and have their own audit story.
+
+    Field semantics
+    ---------------
+
+    * ``kind`` — one of ``"comment_added"``, ``"assigned"``, ``"shared"``,
+      ``"anchored"``. Stable strings so the API can wire-protocol them
+      without re-keying.
+    * ``actor_user_id`` — who *caused* the event:
+        - ``comment_added``: the comment author.
+        - ``assigned``: the user who granted the assignment
+          (``subject_assignees.assigned_by``); may be ``None`` if that
+          user has since been deleted (the row survives via
+          ``ON DELETE SET NULL``).
+        - ``shared``: ``None`` — the share schema does not yet record a
+          granter; we surface the row anyway so the feed reflects access
+          changes, but the actor column is intentionally blank.
+        - ``anchored``: ``None`` — the anchor is minted by the engine,
+          not a specific user.
+    * ``target_user_id`` — the user the event is *about*, when one
+      exists:
+        - ``assigned`` / ``shared``: the user gaining access.
+        - ``comment_added`` / ``anchored``: ``None``.
+    * ``excerpt`` — for ``comment_added``, a leading slice of the comment
+      body (max 200 chars) so the feed renders without a second
+      round-trip; ``None`` for the other kinds.
+    * ``created_at`` — ISO-8601 timestamp from the underlying row. For
+      ``anchored`` we pull from the parent subject row because the
+      ``dossier_anchors`` table does not store a timestamp of its own.
+    """
+
+    kind: str
+    actor_user_id: int | None
+    target_user_id: int | None
+    excerpt: str | None
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReactionRow:
+    """One row in :meth:`AccessRepository.list_reactions`.
+
+    A row models a single ``(comment, user, reaction_key)`` triple —
+    the same user is allowed to leave multiple distinct reactions on
+    one comment (e.g. ``+1`` *and* ``heart``) but cannot stack the
+    same key twice. The route layer is responsible for projecting
+    these into the ``[{key, count, users[], me_reacted}]`` summary
+    surfaced to the API; the repository deliberately stays at the
+    row-level granularity so other consumers (e.g. an audit export)
+    can pivot however they need.
+    """
+
+    comment_id: int
+    user_id: int
+    reaction_key: str
+    created_at: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,6 +458,7 @@ class AccessRepository:
         body: str,
         *,
         created_at: str,
+        parent_comment_id: int | None = None,
     ) -> CommentRow:
         """Append a comment thread entry. Returns the persisted row.
 
@@ -365,6 +466,13 @@ class AccessRepository:
         round-tripping ``cur.lastrowid`` only) so the API can hand the
         full :class:`CommentRow` back to the caller without a separate
         SELECT — keeping the create endpoint a single transaction.
+
+        When ``parent_comment_id`` is provided the comment is recorded
+        as a reply via the ``subject_comment_replies`` side table. The
+        side-table approach lets us add threading without an ALTER on
+        the existing ``subject_comments`` schema; absence of a row in
+        the side table is the canonical signal that the comment is
+        top-level.
         """
         cur = self._conn.execute(
             """
@@ -375,10 +483,21 @@ class AccessRepository:
             """,
             (subject_id, author_user_id, body, created_at),
         )
-        self._conn.commit()
         comment_id = cur.lastrowid
         if comment_id is None:  # pragma: no cover - sqlite3 contract
+            self._conn.rollback()
             raise RuntimeError("INSERT did not yield a lastrowid")
+        if parent_comment_id is not None:
+            self._conn.execute(
+                """
+                INSERT INTO subject_comment_replies(
+                    comment_id, parent_comment_id
+                )
+                VALUES (?, ?)
+                """,
+                (int(comment_id), parent_comment_id),
+            )
+        self._conn.commit()
         return CommentRow(
             id=int(comment_id),
             subject_id=subject_id,
@@ -386,21 +505,26 @@ class AccessRepository:
             body=body,
             created_at=created_at,
             updated_at=None,
+            parent_comment_id=parent_comment_id,
         )
 
     def get_comment(self, comment_id: int) -> CommentRow | None:
         """Look up a single comment, used for delete-time authorisation."""
         row = self._conn.execute(
             """
-            SELECT id, subject_id, author_user_id, body, created_at, updated_at
-            FROM subject_comments
-            WHERE id = ?
+            SELECT
+                c.id, c.subject_id, c.author_user_id, c.body,
+                c.created_at, c.updated_at,
+                r.parent_comment_id
+            FROM subject_comments c
+            LEFT JOIN subject_comment_replies r ON r.comment_id = c.id
+            WHERE c.id = ?
             """,
             (comment_id,),
         ).fetchone()
         if row is None:
             return None
-        cid, sid, author_id, body, created_at, updated_at = row
+        cid, sid, author_id, body, created_at, updated_at, parent_id = row
         return CommentRow(
             id=int(cid),
             subject_id=str(sid),
@@ -408,20 +532,27 @@ class AccessRepository:
             body=str(body),
             created_at=str(created_at),
             updated_at=None if updated_at is None else str(updated_at),
+            parent_comment_id=None if parent_id is None else int(parent_id),
         )
 
     def list_comments(self, subject_id: str) -> list[CommentRow]:
         """Return every comment on ``subject_id``, oldest first.
 
         ``id`` is a deterministic tiebreaker so two comments inserted in
-        the same millisecond still come back in insertion order.
+        the same millisecond still come back in insertion order. The
+        result includes both top-level comments and replies; the route
+        layer is responsible for any tree projection / pagination.
         """
         rows = self._conn.execute(
             """
-            SELECT id, subject_id, author_user_id, body, created_at, updated_at
-            FROM subject_comments
-            WHERE subject_id = ?
-            ORDER BY datetime(created_at) ASC, id ASC
+            SELECT
+                c.id, c.subject_id, c.author_user_id, c.body,
+                c.created_at, c.updated_at,
+                r.parent_comment_id
+            FROM subject_comments c
+            LEFT JOIN subject_comment_replies r ON r.comment_id = c.id
+            WHERE c.subject_id = ?
+            ORDER BY datetime(c.created_at) ASC, c.id ASC
             """,
             (subject_id,),
         ).fetchall()
@@ -433,12 +564,81 @@ class AccessRepository:
                 body=str(body),
                 created_at=str(created_at),
                 updated_at=None if updated_at is None else str(updated_at),
+                parent_comment_id=None if parent_id is None else int(parent_id),
             )
-            for cid, sid, author_id, body, created_at, updated_at in rows
+            for cid, sid, author_id, body, created_at, updated_at, parent_id in rows
         ]
 
+    def list_replies(self, parent_comment_id: int) -> list[CommentRow]:
+        """Return every reply to ``parent_comment_id``, oldest first.
+
+        Powers the per-thread ``GET /comments/{cid}/replies`` endpoint.
+        Caller is responsible for verifying that the parent itself is
+        visible to the actor; this method does no authorisation.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT
+                c.id, c.subject_id, c.author_user_id, c.body,
+                c.created_at, c.updated_at,
+                r.parent_comment_id
+            FROM subject_comment_replies r
+            JOIN subject_comments c ON c.id = r.comment_id
+            WHERE r.parent_comment_id = ?
+            ORDER BY datetime(c.created_at) ASC, c.id ASC
+            """,
+            (parent_comment_id,),
+        ).fetchall()
+        return [
+            CommentRow(
+                id=int(cid),
+                subject_id=str(sid),
+                author_user_id=int(author_id),
+                body=str(body),
+                created_at=str(created_at),
+                updated_at=None if updated_at is None else str(updated_at),
+                parent_comment_id=None if parent_id is None else int(parent_id),
+            )
+            for cid, sid, author_id, body, created_at, updated_at, parent_id in rows
+        ]
+
+    def is_reply(self, comment_id: int) -> bool:
+        """``True`` if ``comment_id`` is itself a reply.
+
+        Used by the route layer to enforce one-level threading: the
+        parent of a new reply must not itself be a reply.
+        """
+        row = self._conn.execute(
+            "SELECT 1 FROM subject_comment_replies WHERE comment_id = ?",
+            (comment_id,),
+        ).fetchone()
+        return row is not None
+
     def delete_comment(self, comment_id: int) -> bool:
-        """Remove a comment. Returns ``True`` if a row was deleted."""
+        """Remove a comment. Returns ``True`` if a row was deleted.
+
+        Replies cascade with the parent: removing a top-level comment
+        also wipes every reply pointing at it. The cascade has to be
+        applied explicitly here because ``subject_comment_replies``
+        only declares ``ON DELETE CASCADE`` on its own row (which
+        clears the join table when the parent vanishes), not on the
+        reply comment itself in ``subject_comments``.
+
+        The one-level threading rule means we do not need to recurse
+        \u2014 a reply cannot itself have replies, so a single sweep is
+        always sufficient.
+        """
+        self._conn.execute(
+            """
+            DELETE FROM subject_comments
+            WHERE id IN (
+                SELECT comment_id
+                FROM subject_comment_replies
+                WHERE parent_comment_id = ?
+            )
+            """,
+            (comment_id,),
+        )
         cur = self._conn.execute(
             "DELETE FROM subject_comments WHERE id = ?",
             (comment_id,),
@@ -478,6 +678,87 @@ class AccessRepository:
         if cur.rowcount == 0:
             return None
         return self.get_comment(comment_id)
+
+    # -- comment reactions ------------------------------------------------
+
+    def add_reaction(
+        self,
+        comment_id: int,
+        user_id: int,
+        reaction_key: str,
+        *,
+        created_at: str,
+    ) -> bool:
+        """Insert a ``(comment, user, key)`` reaction row idempotently.
+
+        Returns ``True`` when a new row was inserted, ``False`` if the
+        same triple already existed (i.e. the actor double-clicked the
+        button). The PUT endpoint surfaces both as 200 to the client —
+        the bool is purely for the route layer's test seam — but
+        keeping the distinction at the repository keeps the audit
+        story honest if we ever start logging deltas.
+        """
+        cur = self._conn.execute(
+            """
+            INSERT OR IGNORE INTO comment_reactions(
+                comment_id, user_id, reaction_key, created_at
+            )
+            VALUES (?, ?, ?, ?)
+            """,
+            (comment_id, user_id, reaction_key, created_at),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def remove_reaction(
+        self,
+        comment_id: int,
+        user_id: int,
+        reaction_key: str,
+    ) -> bool:
+        """Delete a single ``(comment, user, key)`` reaction row.
+
+        Returns ``True`` if a row was actually removed, ``False`` if
+        the actor never had that reaction. The route layer translates
+        the latter into a 404 so a stale optimistic UI doesn't pretend
+        a no-op succeeded.
+        """
+        cur = self._conn.execute(
+            """
+            DELETE FROM comment_reactions
+            WHERE comment_id = ? AND user_id = ? AND reaction_key = ?
+            """,
+            (comment_id, user_id, reaction_key),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def list_reactions(self, comment_id: int) -> list[ReactionRow]:
+        """Return every reaction on ``comment_id`` (oldest first).
+
+        Ordering is ``(reaction_key ASC, created_at ASC)`` so the
+        same emoji always groups together and within an emoji group
+        the earliest reactor leads — good defaults for a "who
+        reacted first" UI without forcing the route to re-sort.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT comment_id, user_id, reaction_key, created_at
+            FROM comment_reactions
+            WHERE comment_id = ?
+            ORDER BY reaction_key ASC, datetime(created_at) ASC, user_id ASC
+            """,
+            (comment_id,),
+        ).fetchall()
+        return [
+            ReactionRow(
+                comment_id=int(cid),
+                user_id=int(uid),
+                reaction_key=str(key),
+                created_at=str(ts),
+            )
+            for cid, uid, key, ts in rows
+        ]
 
     # -- labels -----------------------------------------------------------
 
@@ -708,6 +989,105 @@ class AccessRepository:
                 matched_created_at=str(created_at),
             )
             for itype, ivalue, sid, seed_kind, seed_value, created_at in rows
+        ]
+
+    def list_activity(
+        self,
+        subject_id: str,
+        *,
+        limit: int = 50,
+        excerpt_chars: int = 200,
+    ) -> list[ActivityRow]:
+        """Chronological activity feed for ``subject_id`` (newest first).
+
+        Aggregates four event kinds out of the existing tables — without
+        adding a separate ``activity`` table — so anything that already
+        gets persisted (a comment, an assignment, a share, an anchor
+        mint) automatically shows up here without a second write path
+        that could drift. Conversely, an event we *don't* persist (a
+        delete, an ownership change) is intentionally not reflected; we
+        prefer "missing but consistent" over "synthesised guess".
+
+        Ordering
+        --------
+
+        SQLite's lexical TEXT compare matches ISO-8601 ordering, so a
+        ``datetime(created_at) DESC`` sort gives us a stable feed. Within
+        a single millisecond, ``tiebreak DESC`` keeps the order stable
+        across calls — the comment auto-id, then the assignee/share user
+        id, then ``0`` for anchors. The two non-zero tiebreakers are
+        unique per event kind, so distinct events never collide.
+
+        Parameters
+        ----------
+        limit:
+            Cap on returned rows. Negative or zero short-circuits to an
+            empty list to mirror :meth:`list_visible_summaries`.
+        excerpt_chars:
+            Max characters of comment body included in ``excerpt``;
+            longer comments are truncated client-side as well, but we
+            cap server-side too so a 10k-char comment doesn't bloat the
+            feed payload by 50x.
+        """
+        if limit <= 0:
+            return []
+        rows = self._conn.execute(
+            """
+            SELECT kind, actor_id, target_id, excerpt, ts FROM (
+                SELECT
+                    'comment_added'                    AS kind,
+                    author_user_id                     AS actor_id,
+                    NULL                               AS target_id,
+                    SUBSTR(body, 1, :excerpt_chars)    AS excerpt,
+                    created_at                         AS ts,
+                    id                                 AS tiebreak
+                FROM subject_comments
+                WHERE subject_id = :sid
+                UNION ALL
+                SELECT
+                    'assigned',
+                    assigned_by,
+                    user_id,
+                    NULL,
+                    assigned_at,
+                    user_id
+                FROM subject_assignees
+                WHERE subject_id = :sid
+                UNION ALL
+                SELECT
+                    'shared',
+                    NULL,
+                    user_id,
+                    NULL,
+                    created_at,
+                    user_id
+                FROM subject_shares
+                WHERE subject_id = :sid
+                UNION ALL
+                SELECT
+                    'anchored',
+                    NULL,
+                    NULL,
+                    NULL,
+                    (SELECT created_at FROM subjects WHERE id = :sid),
+                    0
+                FROM dossier_anchors
+                WHERE subject_id = :sid
+            )
+            ORDER BY datetime(ts) DESC, tiebreak DESC
+            LIMIT :limit
+            """,
+            {"sid": subject_id, "excerpt_chars": excerpt_chars, "limit": limit},
+        ).fetchall()
+        return [
+            ActivityRow(
+                kind=str(kind),
+                actor_user_id=None if actor_id is None else int(actor_id),
+                target_user_id=None if target_id is None else int(target_id),
+                excerpt=None if excerpt is None else str(excerpt),
+                created_at=str(ts),
+            )
+            for kind, actor_id, target_id, excerpt, ts in rows
         ]
 
     def list_visible_summaries(
