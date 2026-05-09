@@ -90,6 +90,21 @@ CREATE TABLE IF NOT EXISTS subject_assignees(
 
 CREATE INDEX IF NOT EXISTS idx_subject_assignees_user
     ON subject_assignees(user_id);
+
+CREATE TABLE IF NOT EXISTS subject_todos(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_id TEXT NOT NULL
+        REFERENCES subjects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL
+        REFERENCES users(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_subject_todos_owner
+    ON subject_todos(subject_id, user_id, created_at, id);
 """
 
 
@@ -113,6 +128,23 @@ class AssigneeRow:
     user_id: int
     assigned_by: int | None
     assigned_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class TodoRow:
+    """One row in :meth:`AccessRepository.list_todos`.
+
+    Todos are private to ``user_id`` — a different actor reading
+    the same subject sees only their own rows.
+    """
+
+    id: int
+    subject_id: str
+    user_id: int
+    body: str
+    done: bool
+    created_at: str
+    updated_at: str
 
 
 class AccessRepository:
@@ -293,6 +325,150 @@ class AccessRepository:
             (subject_id, user_id),
         ).fetchone()
         return row is not None
+
+    # -- per-actor TODO checklist ----------------------------------------
+
+    def create_todo(
+        self,
+        subject_id: str,
+        user_id: int,
+        body: str,
+        *,
+        now: str,
+    ) -> TodoRow:
+        """Insert a new TODO and return its persisted row.
+
+        The id is assigned by SQLite's auto-increment so the FE can
+        round-trip the row immediately without a follow-up GET.
+        """
+        cur = self._conn.execute(
+            """
+            INSERT INTO subject_todos(
+                subject_id, user_id, body, done, created_at, updated_at
+            ) VALUES (?, ?, ?, 0, ?, ?)
+            """,
+            (subject_id, user_id, body, now, now),
+        )
+        self._conn.commit()
+        todo_id = int(cur.lastrowid or 0)
+        return TodoRow(
+            id=todo_id,
+            subject_id=subject_id,
+            user_id=user_id,
+            body=body,
+            done=False,
+            created_at=now,
+            updated_at=now,
+        )
+
+    def get_todo(self, todo_id: int) -> TodoRow | None:
+        """Return ``todo_id`` or ``None`` if the row was never
+        created or has been deleted.
+
+        Note: this does *not* enforce per-actor ownership. The
+        route layer is responsible for collapsing "not yours" and
+        "not found" into the same 404 — see
+        :func:`reckora_api.todos.routes._get_owned_or_404`.
+        """
+        row = self._conn.execute(
+            """
+            SELECT id, subject_id, user_id, body, done, created_at, updated_at
+            FROM subject_todos
+            WHERE id = ?
+            """,
+            (todo_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return TodoRow(
+            id=int(row[0]),
+            subject_id=str(row[1]),
+            user_id=int(row[2]),
+            body=str(row[3]),
+            done=bool(row[4]),
+            created_at=str(row[5]),
+            updated_at=str(row[6]),
+        )
+
+    def list_todos(
+        self,
+        subject_id: str,
+        user_id: int,
+    ) -> list[TodoRow]:
+        """Return ``user_id``'s TODOs on ``subject_id``, oldest first.
+
+        We sort by ``(created_at, id)`` so the FE can render the
+        list in the order the user typed them in. ``id`` is the
+        tiebreaker for the rare case of two todos created in the
+        same wall-clock microsecond.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT id, subject_id, user_id, body, done, created_at, updated_at
+            FROM subject_todos
+            WHERE subject_id = ? AND user_id = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (subject_id, user_id),
+        ).fetchall()
+        return [
+            TodoRow(
+                id=int(r[0]),
+                subject_id=str(r[1]),
+                user_id=int(r[2]),
+                body=str(r[3]),
+                done=bool(r[4]),
+                created_at=str(r[5]),
+                updated_at=str(r[6]),
+            )
+            for r in rows
+        ]
+
+    def update_todo(
+        self,
+        todo_id: int,
+        *,
+        body: str | None,
+        done: bool | None,
+        now: str,
+    ) -> TodoRow | None:
+        """Apply a partial update to ``todo_id`` and return the
+        post-update row, or ``None`` if the row does not exist.
+
+        Passing ``body=None`` *and* ``done=None`` is a no-op that
+        does **not** advance ``updated_at`` — a PATCH with an empty
+        body should not silently churn the timestamp.
+        """
+        if body is None and done is None:
+            return self.get_todo(todo_id)
+        sets: list[str] = []
+        params: list[object] = []
+        if body is not None:
+            sets.append("body = ?")
+            params.append(body)
+        if done is not None:
+            sets.append("done = ?")
+            params.append(1 if done else 0)
+        sets.append("updated_at = ?")
+        params.append(now)
+        params.append(todo_id)
+        cur = self._conn.execute(
+            f"UPDATE subject_todos SET {', '.join(sets)} WHERE id = ?",
+            params,
+        )
+        self._conn.commit()
+        if cur.rowcount == 0:
+            return None
+        return self.get_todo(todo_id)
+
+    def delete_todo(self, todo_id: int) -> bool:
+        """Drop ``todo_id``. Returns ``True`` iff a row was removed."""
+        cur = self._conn.execute(
+            "DELETE FROM subject_todos WHERE id = ?",
+            (todo_id,),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
 
     # -- comments ---------------------------------------------------------
 
