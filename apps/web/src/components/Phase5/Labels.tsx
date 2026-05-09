@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { api, unwrap } from "@/api/client";
 import type { LabelEntry } from "@/api/types";
+import { describeError, useToast } from "@/lib/toast";
 
 async function fetchLabels(subjectId: string): Promise<LabelEntry[]> {
   return unwrap(
@@ -40,10 +41,25 @@ export function LabelChips({ subjectId }: { subjectId: string }) {
     queryKey: ["subjects", subjectId, "labels"],
     queryFn: () => fetchLabels(subjectId),
   });
+  const toast = useToast();
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: ["subjects", subjectId, "labels"] });
-  const add = useMutation({ mutationFn: addLabel, onSuccess: invalidate });
-  const remove = useMutation({ mutationFn: removeLabel, onSuccess: invalidate });
+  const add = useMutation({
+    mutationFn: addLabel,
+    onSuccess: (_data, variables) => {
+      invalidate();
+      toast.push("success", `Added label \u201c${variables.label}\u201d`);
+    },
+    onError: (error) => toast.push("error", describeError(error)),
+  });
+  const remove = useMutation({
+    mutationFn: removeLabel,
+    onSuccess: (_data, variables) => {
+      invalidate();
+      toast.push("success", `Removed label \u201c${variables.label}\u201d`);
+    },
+    onError: (error) => toast.push("error", describeError(error)),
+  });
 
   const [draft, setDraft] = useState("");
 

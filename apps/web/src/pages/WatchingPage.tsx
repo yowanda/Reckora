@@ -3,8 +3,9 @@ import { Link } from "react-router-dom";
 
 import { api, unwrap } from "@/api/client";
 import type { SavedDossierSummary } from "@/api/types";
+import { EmptyState } from "@/components/EmptyState";
 import { ErrorMessage } from "@/components/ErrorMessage";
-import { Spinner } from "@/components/Spinner";
+import { SkeletonList } from "@/components/Skeleton";
 import { formatRelativeTime, shortId } from "@/lib/format";
 
 async function fetchWatching(): Promise<SavedDossierSummary[]> {
@@ -25,12 +26,14 @@ export function WatchingPage() {
           Subjects whose activity you follow.
         </p>
       </div>
-      {query.isPending ? <Spinner /> : null}
+      {query.isPending ? <SkeletonList count={3} /> : null}
       {query.error ? <ErrorMessage error={query.error} /> : null}
       {query.data && query.data.length === 0 ? (
-        <div className="rounded border border-border bg-bg-panel p-6 text-center text-sm text-zinc-400">
-          You are not watching anything.
-        </div>
+        <EmptyState
+          icon="○"
+          title="Not watching anything"
+          description="Open a subject and click ‘Watch’ to follow new comments and status changes."
+        />
       ) : null}
       {query.data ? (
         <ul className="divide-y divide-border rounded border border-border bg-bg-panel">

@@ -18,6 +18,7 @@ import { WatchToggle } from "@/components/Phase5/Watchers";
 import { CrossReferences } from "@/components/Phase5/Xref";
 import { Spinner } from "@/components/Spinner";
 import { formatRelativeTime, shortId } from "@/lib/format";
+import { describeError, useToast } from "@/lib/toast";
 
 async function fetchSubject(id: string): Promise<SavedDossierPayload> {
   return unwrap(
@@ -82,6 +83,7 @@ export function SubjectDetailPage() {
   const subjectId = params.subjectId ?? "";
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const toast = useToast();
 
   const subject = useQuery({
     queryKey: ["subjects", subjectId, "summary"],
@@ -107,8 +109,10 @@ export function SubjectDetailPage() {
     mutationFn: deleteSubject,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["subjects"] });
+      toast.push("success", "Subject deleted");
       navigate("/subjects");
     },
+    onError: (error) => toast.push("error", describeError(error)),
   });
 
   if (subjectId === "") {

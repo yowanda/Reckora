@@ -6,6 +6,7 @@ import { api, unwrap } from "@/api/client";
 import type { InvestigationRequest, SavedDossierPayload } from "@/api/types";
 import { ErrorMessage } from "@/components/ErrorMessage";
 import { Spinner } from "@/components/Spinner";
+import { describeError, useToast } from "@/lib/toast";
 
 const KINDS = [
   "username",
@@ -27,6 +28,7 @@ async function postInvestigation(
 
 export function NewInvestigationPage() {
   const navigate = useNavigate();
+  const toast = useToast();
   const [kind, setKind] = useState<Kind>("username");
   const [value, setValue] = useState("");
   const [archive, setArchive] = useState(false);
@@ -38,8 +40,10 @@ export function NewInvestigationPage() {
   const mutation = useMutation({
     mutationFn: postInvestigation,
     onSuccess: (data) => {
+      toast.push("success", "Investigation saved");
       navigate(`/subjects/${data.id}`);
     },
+    onError: (error) => toast.push("error", describeError(error)),
   });
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {

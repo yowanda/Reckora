@@ -6,6 +6,7 @@ import type { CommentEntry, ReactionGroup } from "@/api/types";
 import { ErrorMessage } from "@/components/ErrorMessage";
 import { Spinner } from "@/components/Spinner";
 import { formatRelativeTime } from "@/lib/format";
+import { describeError, useToast } from "@/lib/toast";
 
 async function fetchComments(subjectId: string): Promise<CommentEntry[]> {
   return unwrap(
@@ -106,21 +107,30 @@ const REACTION_KEYS = ["+1", "-1", "eyes", "heart"];
 
 export function Comments({ subjectId }: { subjectId: string }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const list = useQuery({
     queryKey: ["subjects", subjectId, "comments"],
     queryFn: () => fetchComments(subjectId),
   });
   const post = useMutation({
     mutationFn: postComment,
-    onSuccess: () => {
+    onSuccess: (entry) => {
       qc.invalidateQueries({ queryKey: ["subjects", subjectId, "comments"] });
       qc.invalidateQueries({ queryKey: ["subjects", subjectId, "activity"] });
+      toast.push(
+        "success",
+        entry.parent_comment_id ? "Reply posted" : "Comment posted",
+      );
     },
+    onError: (error) => toast.push("error", describeError(error)),
   });
   const remove = useMutation({
     mutationFn: deleteComment,
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ["subjects", subjectId, "comments"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["subjects", subjectId, "comments"] });
+      toast.push("success", "Comment deleted");
+    },
+    onError: (error) => toast.push("error", describeError(error)),
   });
 
   const [draft, setDraft] = useState("");

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, unwrap } from "@/api/client";
 import type { SavedDossierSummary } from "@/api/types";
+import { describeError, useToast } from "@/lib/toast";
 
 async function fetchPins(): Promise<SavedDossierSummary[]> {
   return unwrap(await api.GET("/api/v1/me/pins"));
@@ -25,6 +26,7 @@ async function unpin(subjectId: string): Promise<void> {
 
 export function PinToggle({ subjectId }: { subjectId: string }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const pins = useQuery({ queryKey: ["me", "pins"], queryFn: fetchPins });
   const pinned = (pins.data ?? []).some((s) => s.id === subjectId);
   const setPinned = useMutation({
@@ -34,8 +36,13 @@ export function PinToggle({ subjectId }: { subjectId: string }) {
       } else {
         await unpin(subjectId);
       }
+      return next;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["me", "pins"] }),
+    onSuccess: (next) => {
+      qc.invalidateQueries({ queryKey: ["me", "pins"] });
+      toast.push("success", next ? "Pinned" : "Unpinned");
+    },
+    onError: (error) => toast.push("error", describeError(error)),
   });
 
   return (

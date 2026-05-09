@@ -3,8 +3,9 @@ import { Link } from "react-router-dom";
 
 import { api, unwrap } from "@/api/client";
 import type { SubjectSummary } from "@/api/types";
+import { EmptyState } from "@/components/EmptyState";
 import { ErrorMessage } from "@/components/ErrorMessage";
-import { Spinner } from "@/components/Spinner";
+import { SkeletonList } from "@/components/Skeleton";
 import { formatRelativeTime, shortId } from "@/lib/format";
 
 async function fetchSubjects(): Promise<SubjectSummary[]> {
@@ -33,12 +34,22 @@ export function SubjectsListPage() {
           New investigation
         </Link>
       </div>
-      {query.isPending ? <Spinner /> : null}
+      {query.isPending ? <SkeletonList count={5} /> : null}
       {query.error ? <ErrorMessage error={query.error} /> : null}
       {query.data && query.data.length === 0 ? (
-        <div className="rounded border border-border bg-bg-panel p-6 text-center text-sm text-zinc-400">
-          No subjects yet. Start by running a new investigation.
-        </div>
+        <EmptyState
+          icon="◎"
+          title="No subjects yet"
+          description="Start by running a new investigation on a username, email, domain, or wallet."
+          action={
+            <Link
+              to="/investigations/new"
+              className="rounded bg-accent-muted px-3 py-1 text-xs hover:bg-accent"
+            >
+              New investigation
+            </Link>
+          }
+        />
       ) : null}
       {query.data && query.data.length > 0 ? (
         <ul className="divide-y divide-border rounded border border-border bg-bg-panel">
