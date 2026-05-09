@@ -3,9 +3,11 @@ import { Link } from "react-router-dom";
 
 import { api, unwrap } from "@/api/client";
 import type { SavedDossierSummary } from "@/api/types";
+import { EmptyState } from "@/components/EmptyState";
 import { ErrorMessage } from "@/components/ErrorMessage";
-import { Spinner } from "@/components/Spinner";
+import { SkeletonList } from "@/components/Skeleton";
 import { formatRelativeTime, shortId } from "@/lib/format";
+import { describeError, useToast } from "@/lib/toast";
 
 async function fetchPins(): Promise<SavedDossierSummary[]> {
   return unwrap(await api.GET("/api/v1/me/pins"));
@@ -21,10 +23,15 @@ async function unpin(subjectId: string): Promise<void> {
 
 export function PinsPage() {
   const qc = useQueryClient();
+  const toast = useToast();
   const query = useQuery({ queryKey: ["me", "pins"], queryFn: fetchPins });
   const remove = useMutation({
     mutationFn: unpin,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["me", "pins"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["me", "pins"] });
+      toast.push("success", "Unpinned");
+    },
+    onError: (error) => toast.push("error", describeError(error)),
   });
 
   return (
@@ -35,12 +42,14 @@ export function PinsPage() {
           Quick access to the dossiers you have starred.
         </p>
       </div>
-      {query.isPending ? <Spinner /> : null}
+      {query.isPending ? <SkeletonList count={3} /> : null}
       {query.error ? <ErrorMessage error={query.error} /> : null}
       {query.data && query.data.length === 0 ? (
-        <div className="rounded border border-border bg-bg-panel p-6 text-center text-sm text-zinc-400">
-          Nothing pinned yet.
-        </div>
+        <EmptyState
+          icon="☆"
+          title="Nothing pinned yet"
+          description="Open a subject and click ‘Pin’ to add it here for quick access."
+        />
       ) : null}
       {query.data ? (
         <ul className="divide-y divide-border rounded border border-border bg-bg-panel">

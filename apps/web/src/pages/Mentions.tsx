@@ -3,8 +3,9 @@ import { Link } from "react-router-dom";
 
 import { api, unwrap } from "@/api/client";
 import type { MentionEntry } from "@/api/types";
+import { EmptyState } from "@/components/EmptyState";
 import { ErrorMessage } from "@/components/ErrorMessage";
-import { Spinner } from "@/components/Spinner";
+import { SkeletonList } from "@/components/Skeleton";
 import { formatRelativeTime, shortId } from "@/lib/format";
 
 async function fetchMentions(): Promise<MentionEntry[]> {
@@ -25,12 +26,14 @@ export function MentionsPage() {
           Comments where you were tagged with <code>@username</code>.
         </p>
       </div>
-      {query.isPending ? <Spinner /> : null}
+      {query.isPending ? <SkeletonList count={3} /> : null}
       {query.error ? <ErrorMessage error={query.error} /> : null}
       {query.data && query.data.length === 0 ? (
-        <div className="rounded border border-border bg-bg-panel p-6 text-center text-sm text-zinc-400">
-          No mentions yet.
-        </div>
+        <EmptyState
+          icon="@"
+          title="No mentions yet"
+          description="When teammates tag you with @username in a comment, the thread shows up here."
+        />
       ) : null}
       {query.data ? (
         <ul className="divide-y divide-border rounded border border-border bg-bg-panel">

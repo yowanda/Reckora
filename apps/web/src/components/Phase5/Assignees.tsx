@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { api, unwrap } from "@/api/client";
 import type { AssigneeEntry } from "@/api/types";
+import { describeError, useToast } from "@/lib/toast";
 
 async function fetchAssignees(subjectId: string): Promise<AssigneeEntry[]> {
   return unwrap(
@@ -42,6 +43,7 @@ async function removeAssignee(args: {
 
 export function Assignees({ subjectId }: { subjectId: string }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const list = useQuery({
     queryKey: ["subjects", subjectId, "assignees"],
     queryFn: () => fetchAssignees(subjectId),
@@ -52,10 +54,21 @@ export function Assignees({ subjectId }: { subjectId: string }) {
     });
     qc.invalidateQueries({ queryKey: ["subjects", subjectId, "activity"] });
   };
-  const add = useMutation({ mutationFn: addAssignee, onSuccess: invalidate });
+  const add = useMutation({
+    mutationFn: addAssignee,
+    onSuccess: (entry) => {
+      invalidate();
+      toast.push("success", `Assigned @${entry.username}`);
+    },
+    onError: (error) => toast.push("error", describeError(error)),
+  });
   const remove = useMutation({
     mutationFn: removeAssignee,
-    onSuccess: invalidate,
+    onSuccess: (_data, variables) => {
+      invalidate();
+      toast.push("success", `Removed @${variables.username}`);
+    },
+    onError: (error) => toast.push("error", describeError(error)),
   });
 
   const [draft, setDraft] = useState("");

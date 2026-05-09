@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError, unwrap } from "@/api/client";
 import type { NoteEntry } from "@/api/types";
 import { ErrorMessage } from "@/components/ErrorMessage";
+import { describeError, useToast } from "@/lib/toast";
 
 async function fetchNote(subjectId: string): Promise<NoteEntry | null> {
   const result = await api.GET("/api/v1/subjects/{subject_id}/notes/me", {
@@ -43,19 +44,26 @@ export function PrivateNote({ subjectId }: { subjectId: string }) {
     retry: (count, err) =>
       !(err instanceof ApiError && err.status === 404) && count < 1,
   });
+  const toast = useToast();
   const save = useMutation({
     mutationFn: saveNote,
-    onSuccess: () =>
+    onSuccess: () => {
       qc.invalidateQueries({
         queryKey: ["subjects", subjectId, "notes", "me"],
-      }),
+      });
+      toast.push("success", "Note saved");
+    },
+    onError: (error) => toast.push("error", describeError(error)),
   });
   const clear = useMutation({
     mutationFn: clearNote,
-    onSuccess: () =>
+    onSuccess: () => {
       qc.invalidateQueries({
         queryKey: ["subjects", subjectId, "notes", "me"],
-      }),
+      });
+      toast.push("success", "Note cleared");
+    },
+    onError: (error) => toast.push("error", describeError(error)),
   });
 
   const [draft, setDraft] = useState("");

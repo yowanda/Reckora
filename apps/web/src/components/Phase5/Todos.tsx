@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { api, unwrap } from "@/api/client";
 import type { TodoEntry } from "@/api/types";
+import { describeError, useToast } from "@/lib/toast";
 
 async function fetchTodos(subjectId: string): Promise<TodoEntry[]> {
   return unwrap(
@@ -58,6 +59,7 @@ async function deleteTodo(args: {
 
 export function Todos({ subjectId }: { subjectId: string }) {
   const qc = useQueryClient();
+  const toast = useToast();
   const list = useQuery({
     queryKey: ["subjects", subjectId, "todos", "me"],
     queryFn: () => fetchTodos(subjectId),
@@ -65,9 +67,27 @@ export function Todos({ subjectId }: { subjectId: string }) {
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: ["subjects", subjectId, "todos", "me"] });
 
-  const create = useMutation({ mutationFn: createTodo, onSuccess: invalidate });
-  const patch = useMutation({ mutationFn: patchTodo, onSuccess: invalidate });
-  const remove = useMutation({ mutationFn: deleteTodo, onSuccess: invalidate });
+  const create = useMutation({
+    mutationFn: createTodo,
+    onSuccess: () => {
+      invalidate();
+      toast.push("success", "Task added");
+    },
+    onError: (error) => toast.push("error", describeError(error)),
+  });
+  const patch = useMutation({
+    mutationFn: patchTodo,
+    onSuccess: invalidate,
+    onError: (error) => toast.push("error", describeError(error)),
+  });
+  const remove = useMutation({
+    mutationFn: deleteTodo,
+    onSuccess: () => {
+      invalidate();
+      toast.push("success", "Task removed");
+    },
+    onError: (error) => toast.push("error", describeError(error)),
+  });
 
   const [draft, setDraft] = useState("");
 

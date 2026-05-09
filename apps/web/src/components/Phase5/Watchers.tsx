@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
 import type { WatcherEntry } from "@/api/types";
 import { useAuth } from "@/lib/auth";
+import { describeError, useToast } from "@/lib/toast";
 
 async function fetchWatchers(subjectId: string): Promise<WatcherEntry[]> {
   return unwrap(
@@ -41,6 +42,7 @@ export function WatchToggle({ subjectId }: { subjectId: string }) {
   const watching = (watchers.data ?? []).some((w) => w.username === me);
   const count = watchers.data?.length ?? 0;
 
+  const toast = useToast();
   const setWatching = useMutation({
     mutationFn: async (next: boolean) => {
       if (next) {
@@ -48,9 +50,13 @@ export function WatchToggle({ subjectId }: { subjectId: string }) {
       } else {
         await unwatch(subjectId);
       }
+      return next;
     },
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ["subjects", subjectId, "watchers"] }),
+    onSuccess: (next) => {
+      qc.invalidateQueries({ queryKey: ["subjects", subjectId, "watchers"] });
+      toast.push("success", next ? "Watching" : "Stopped watching");
+    },
+    onError: (error) => toast.push("error", describeError(error)),
   });
 
   return (

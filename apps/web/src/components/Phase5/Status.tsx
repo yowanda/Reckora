@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
 import type { StatusEntry } from "@/api/types";
 import { ErrorMessage } from "@/components/ErrorMessage";
+import { describeError, useToast } from "@/lib/toast";
 
 async function fetchStatus(subjectId: string): Promise<StatusEntry> {
   return unwrap(
@@ -38,13 +39,16 @@ export function StatusPicker({ subjectId }: { subjectId: string }) {
     queryKey: ["status-catalog"],
     queryFn: fetchCatalog,
   });
+  const toast = useToast();
   const mutate = useMutation({
     mutationFn: setStatus,
-    onSuccess: () => {
+    onSuccess: (entry) => {
       qc.invalidateQueries({ queryKey: ["subjects", subjectId, "status"] });
       qc.invalidateQueries({ queryKey: ["subjects", subjectId, "activity"] });
       qc.invalidateQueries({ queryKey: ["status-catalog"] });
+      toast.push("success", `Status set to \u201c${entry.status}\u201d`);
     },
+    onError: (error) => toast.push("error", describeError(error)),
   });
 
   const current = status.data?.status ?? "";
