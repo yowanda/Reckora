@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -22,7 +23,7 @@ def _tiktok_url(handle: str) -> str:
     return f"{TIKTOK_PROFILE_BASE}/@{handle}"
 
 
-def _wrap_rehydration(data: dict[str, object]) -> str:
+def _wrap_rehydration(data: dict[str, Any]) -> str:
     return (
         "<html><body>"
         '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">'
@@ -31,7 +32,7 @@ def _wrap_rehydration(data: dict[str, object]) -> str:
     )
 
 
-def _existing_payload() -> dict[str, object]:
+def _existing_payload() -> dict[str, Any]:
     return {
         "__DEFAULT_SCOPE__": {
             "webapp.user-detail": {
@@ -140,7 +141,7 @@ async def test_collect_returns_empty_for_status_code_10221(
     httpx_mock: HTTPXMock, user_tiktok: Identifier
 ) -> None:
     """``statusCode: 10221`` is TikTok's "user not found"."""
-    payload = {
+    payload: dict[str, Any] = {
         "__DEFAULT_SCOPE__": {
             "webapp.user-detail": {"statusCode": 10221, "statusMsg": "user not found"}
         }
@@ -193,7 +194,7 @@ async def test_collect_handles_malformed_rehydration_json(
 async def test_collect_returns_empty_when_user_payload_missing_unique_id(
     httpx_mock: HTTPXMock, user_tiktok: Identifier
 ) -> None:
-    payload = {
+    payload: dict[str, Any] = {
         "__DEFAULT_SCOPE__": {
             "webapp.user-detail": {
                 "statusCode": 0,

@@ -9,6 +9,7 @@ minimal slice of X's wire shape we depend on.
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -28,11 +29,11 @@ def _x_url(handle: str) -> str:
     return f"{X_SYNDICATION_BASE}/srv/timeline-profile/screen-name/{handle}?showReplies=false"
 
 
-def _wrap_next_data(data: dict[str, object]) -> str:
+def _wrap_next_data(data: dict[str, Any]) -> str:
     return f'<html><body><script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script></body></html>'
 
 
-def _full_user_payload() -> dict[str, object]:
+def _full_user_payload() -> dict[str, Any]:
     """Mirror the slice of X's profile widget JSON we depend on."""
     return {
         "props": {
@@ -191,10 +192,8 @@ async def test_collect_falls_back_to_user_url_when_no_entities(
     httpx_mock: HTTPXMock, user_jack: Identifier
 ) -> None:
     payload = _full_user_payload()
-    user = payload["props"]["pageProps"]["timeline"]["entries"][0]["content"]["tweet"][  # type: ignore[index]
-        "user"
-    ]
-    user.pop("entities")  # type: ignore[attr-defined]
+    user = payload["props"]["pageProps"]["timeline"]["entries"][0]["content"]["tweet"]["user"]
+    user.pop("entities")
     httpx_mock.add_response(url=_x_url("jack"), text=_wrap_next_data(payload))
     async with httpx.AsyncClient() as client:
         collector = XCollector(client=client)
@@ -209,7 +208,7 @@ async def test_collect_returns_empty_when_no_header_props(
     httpx_mock: HTTPXMock, user_jack: Identifier
 ) -> None:
     """Unknown user: widget renders without ``headerProps.screenName``."""
-    payload = {"props": {"pageProps": {"timeline": {"entries": []}}}}
+    payload: dict[str, Any] = {"props": {"pageProps": {"timeline": {"entries": []}}}}
     httpx_mock.add_response(url=_x_url("jack"), text=_wrap_next_data(payload))
     async with httpx.AsyncClient() as client:
         collector = XCollector(client=client)

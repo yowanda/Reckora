@@ -9,6 +9,8 @@ full matrix here.
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
@@ -21,7 +23,7 @@ from reckora.collectors.social_presence import (
     THREADS_PROFILE_BASE,
     SocialPresenceProbeCollector,
 )
-from reckora.models.entity import Identifier
+from reckora.models.entity import Identifier, Trace
 from reckora.models.enums import IdentifierType, TraceSource
 
 
@@ -50,7 +52,7 @@ def _facebook(handle: str) -> str:
     return f"{FACEBOOK_PROFILE_BASE}/{handle}"
 
 
-def _by_platform(traces: list) -> dict[str, dict[str, object]]:
+def _by_platform(traces: list[Trace]) -> dict[str, dict[str, Any]]:
     return {trace.fields["platform"]: trace.fields for trace in traces}
 
 
