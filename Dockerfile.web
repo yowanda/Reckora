@@ -1,0 +1,34 @@
+################################################################################
+# Reckora SPA + Caddy reverse proxy
+#
+# Stage 1 builds the React/TS SPA. Stage 2 is the runtime: Caddy serves the
+# built static assets and reverse-proxies everything API-shaped (``/api/*``,
+# ``/healthz``, ``/openapi.json``, ``/docs*``, ``/screenshots/*``) back to the
+# ``api`` service over the compose network.
+################################################################################
+
+# ─── stage 1: SPA build ───────────────────────────────────────────────────────
+FROM node:20-alpine AS spa
+
+WORKDIR /web
+
+COPY apps/web/package.json apps/web/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
+
+COPY apps/web/. ./
+
+# At build time the SPA is configured for same-origin requests (empty
+# ``VITE_API_BASE_URL``); Caddy in stage 2 mounts ``/api`` onto the same host
+# so the runtime never needs CORS.
+ENV VITE_API_BASE_URL=""
+
+RUN npm run build
+
+# ─── stage 2: Caddy runtime ───────────────────────────────────────────────────
+FROM caddy:2.8-alpine AS runtime
+
+COPY --from=spa /web/dist /usr/share/caddy
+COPY deploy/Caddyfile /etc/caddy/Caddyfile
+
+EXPOSE 80 443

@@ -1,0 +1,65 @@
+# Reckora — docker-compose for single-host deployments
+#
+# Brings up two long-running services:
+#
+#   api  — FastAPI (uvicorn) inside a slim Python image. Persists SQLite +
+#          captured screenshots under the ``reckora_data`` named volume.
+#   web  — Caddy serving the built SPA + reverse-proxying API-shaped paths
+#          back to ``api``. Caddy auto-issues a Let's Encrypt cert for the
+#          domain set in ``.env``.
+#
+# Quick start
+# -----------
+#   cp deploy/.env.example .env
+#   # edit DOMAIN + RECKORA_API_JWT_SECRET
+#   docker compose up -d --build
+#   docker compose exec api reckora-api auth create-user --role admin
+#
+# See ``DEPLOY.md`` for a full walk-through (firewall, DNS, ops).
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: reckora-api:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Override the in-image defaults to point at the mounted volume.
+      RECKORA_DB_PATH: /data/reckora.db
+      RECKORA_API_SCREENSHOTS_DIR: /data/screenshots
+      RECKORA_API_SCREENSHOTS_URL_PREFIX: /screenshots
+    volumes:
+      - reckora_data:/data
+    expose:
+      - "8000"
+    networks:
+      - reckora_net
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: reckora-web:local
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    networks:
+      - reckora_net
+
+networks:
+  reckora_net:
+    driver: bridge
+
+volumes:
+  reckora_data:
+  caddy_data:
+  caddy_config:
