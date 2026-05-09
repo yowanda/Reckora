@@ -47,7 +47,7 @@ default, `8px` panels, `12px` modals.
 | **M4** | Layout chrome: sidebar nav + breadcrumbs + global ⌘K command        | ✅ done | New `Sidebar` (logo, sectioned nav, footer with role badge + sign-out), sticky topbar with `Breadcrumbs` + Search button, `CommandPalette` modal (⌘K / Ctrl+K). Mobile drawer for the sidebar. |
 | **M5** | Page-by-page restyle                                                | ✅ done | Login (branded sign-in panel + ambient glow), Subjects (filter + kind chips), SubjectDetail (panel headers, monospaced ids, danger-toned delete), NewInvestigation (toggle cards w/ descriptions), Mentions / Pinned / Watching (shared `SavedDossierList`), Members (admin panel polish, role chip + live dot), and Phase 5 cards normalised onto the new ink/fg/accent/alert tokens. |
 | **M6** | Polish: empty states, skeletons, errors, motion                     | ✅ done | New shimmer skeleton (accent sweep), empty states with hairline accent + dashed border, on-brand error toasts (ok/danger/info palette), forensic 404 page, page-transition fade-in. All animations gated by `prefers-reduced-motion`. |
-| **M7** | Rebuild + redeploy to VPS                                           | pending | `docker compose build && up -d`. |
+| **M7** | Rebuild + redeploy to VPS                                           | ✅ done | Web image rebuilt on VPS (`docker compose build web && up -d web`); new bundle live behind `https://reckora.my.id`. Cache headers verified — `index.html` `no-cache`, `/assets/*` `immutable`. API container untouched. Public DNS resolvers still report stale `103.7.9.22` for ~3 hours from some networks; Cloudflare DNS already returns `140.245.45.103`. |
 
 Status legend: ✅ done · ⏳ in progress · pending · ❌ blocked.
 
