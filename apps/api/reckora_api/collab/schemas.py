@@ -20,6 +20,20 @@ class CommentCreate(BaseModel):
     body: str = Field(..., min_length=1, max_length=_COMMENT_BODY_MAX)
 
 
+class CommentUpdate(BaseModel):
+    """Body for ``PATCH /api/v1/subjects/{subject_id}/comments/{id}``.
+
+    Same shape as :class:`CommentCreate` — we don't allow partial-field
+    PATCHes because there is currently only one editable column. If
+    additional fields land later (e.g. ``pinned``), they should be
+    added here as ``Optional`` rather than a separate route.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    body: str = Field(..., min_length=1, max_length=_COMMENT_BODY_MAX)
+
+
 class CommentEntry(BaseModel):
     """One row in ``GET /api/v1/subjects/{subject_id}/comments``.
 
