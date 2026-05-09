@@ -28,9 +28,13 @@ reckora investigate example.com --ai                           # → domain
 # Pass --kind explicitly to override auto-detection.
 reckora investigate user.name --kind username   # otherwise treated as a domain
 
-# Pick the format / write to file (extension is enough — md / json / html / pdf).
+# Pick the format / write to file (extension is enough — md / json / ndjson / html / pdf).
 reckora investigate octocat --output dossier.html
 reckora investigate octocat --format pdf --output dossier.pdf
+
+# NDJSON: one JSON object per line, one line per logical record. Streams
+# cleanly into jq / log shippers / dataframes:
+reckora investigate octocat --format ndjson | jq -c 'select(.record=="edge") | .edge'
 
 # Persist to the SQLite store and reopen.
 reckora investigate octocat --save
@@ -61,7 +65,7 @@ Supported `--kind` values: `username`, `email`, `domain`, `url`, `phone`, `walle
 
 Active collectors (default orchestrator): GitHub, Hacker News, Keybase, Gravatar, Reddit, WHOIS / RDAP, DNS records (NS / MX / TXT / SPF / DMARC / DNSSEC via `dnspython`), web profile, phone (offline `phonenumbers`), email, wallet (Blockstream Esplora / Etherscan / Solana mainnet-beta JSON-RPC), avatar perceptual hash, opt-in HIBP breach.
 
-Every dossier — markdown / HTML / JSON / PDF — carries `## Timeline`, `## Anomalies`, an optional `## Cross-trace anchor`, and clickable evidence + Wayback / screenshot links. The same projection is exposed at `GET /api/v1/subjects/{id}` so the frontend can reuse it without re-deriving.
+Every dossier — markdown / HTML / JSON / NDJSON / PDF — carries `## Timeline`, `## Anomalies`, an optional `## Cross-trace anchor`, and clickable evidence + Wayback / screenshot links. The same projection is exposed at `GET /api/v1/subjects/{id}` so the frontend can reuse it without re-deriving. NDJSON envelopes each record under a top-level `record` discriminator so a downstream `jq -c 'select(.record=="trace") | .trace'` projects records as standalone documents without re-parsing the whole dossier.
 
 ## HTTP API
 

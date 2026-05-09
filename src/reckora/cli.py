@@ -49,6 +49,7 @@ from .reasoning.summarize import summarize
 from .reports.html import to_dossier_html
 from .reports.json_export import to_dossier_json
 from .reports.markdown import to_dossier_md
+from .reports.ndjson import to_dossier_ndjson
 from .reports.pdf import to_dossier_pdf
 
 app = typer.Typer(
@@ -143,6 +144,15 @@ def _render_dossier(
             hypotheses=hypotheses,
             anchor=anchor,
         )
+    if fmt == "ndjson":
+        return to_dossier_ndjson(
+            subject=subject,
+            traces=traces,
+            edges=edges,
+            summary=summary,
+            hypotheses=hypotheses,
+            anchor=anchor,
+        )
     if fmt == "html":
         return to_dossier_html(
             subject=subject,
@@ -170,7 +180,9 @@ def _render_dossier(
             hypotheses=hypotheses,
             anchor=anchor,
         )
-    raise typer.BadParameter(f"unknown format {fmt!r}; expected one of: md, json, html, pdf")
+    raise typer.BadParameter(
+        f"unknown format {fmt!r}; expected one of: md, json, ndjson, html, pdf"
+    )
 
 
 def _format_from_path(path: Path) -> str:
@@ -178,6 +190,8 @@ def _format_from_path(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix == ".json":
         return "json"
+    if suffix in {".ndjson", ".jsonl"}:
+        return "ndjson"
     if suffix in {".html", ".htm"}:
         return "html"
     if suffix == ".pdf":
@@ -300,12 +314,12 @@ def investigate(
         typer.Option(
             "--output",
             "-o",
-            help="Write the dossier to a file (.json, .md, .html, or .pdf).",
+            help="Write the dossier to a file (.json, .ndjson, .md, .html, or .pdf).",
         ),
     ] = None,
     fmt: Annotated[
         str,
-        typer.Option("--format", "-f", help="Stdout format: md|json|html|pdf."),
+        typer.Option("--format", "-f", help="Stdout format: md|json|ndjson|html|pdf."),
     ] = "md",
     ai: Annotated[
         bool,
@@ -475,14 +489,14 @@ def show(
     subject_id: Annotated[str, typer.Argument(help="Subject id (e.g. subj-abcdef123456).")],
     fmt: Annotated[
         str,
-        typer.Option("--format", "-f", help="Output format: md|json|html|pdf."),
+        typer.Option("--format", "-f", help="Output format: md|json|ndjson|html|pdf."),
     ] = "md",
     output: Annotated[
         Path | None,
         typer.Option(
             "--output",
             "-o",
-            help="Write the dossier to a file (.json, .md, .html, or .pdf).",
+            help="Write the dossier to a file (.json, .ndjson, .md, .html, or .pdf).",
         ),
     ] = None,
     db: Annotated[
