@@ -1,0 +1,28 @@
+import type { components } from "./schema.gen";
+
+export type Schemas = components["schemas"];
+export type ActivityEvent = Schemas["ActivityEvent"];
+export type AssigneeEntry = Schemas["AssigneeEntry"];
+export type CommentCreate = Schemas["CommentCreate"];
+export type CommentEntry = Schemas["CommentEntry"];
+export type CrossReferenceEntry = Schemas["CrossReferenceEntry"];
+export type CrossReferenceList = Schemas["CrossReferenceList"];
+export type CrossReferenceMatch = Schemas["CrossReferenceMatch"];
+export type Identifier = Schemas["Identifier"];
+export type InvestigationRequest = Schemas["InvestigationRequest"];
+export type LabelCatalogEntry = Schemas["LabelCatalogEntry"];
+export type LabelEntry = Schemas["LabelEntry"];
+export type MentionEntry = Schemas["MentionEntry"];
+export type NoteEntry = Schemas["NoteEntry"];
+export type ReactionGroup = Schemas["ReactionGroup"];
+export type SavedDossierPayload = Schemas["SavedDossierPayload"];
+export type SavedDossierSummary = Schemas["SavedDossierSummary"];
+export type StatusEntry = Schemas["StatusEntry"];
+export type SubjectSummary = Schemas["SubjectSummary"];
+export type TodoEntry = Schemas["TodoEntry"];
+export type TokenResponse = Schemas["TokenResponse"];
+export type UnreadStatus = Schemas["UnreadStatus"];
+export type UserPublic = Schemas["UserPublic"];
+export type VisitEntry = Schemas["VisitEntry"];
+export type WatchStatus = Schemas["WatchStatus"];
+export type WatcherEntry = Schemas["WatcherEntry"];
