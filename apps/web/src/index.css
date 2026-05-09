@@ -2,14 +2,140 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Reckora — Tier 3 forensic / intelligence aesthetic. */
+
 :root {
   color-scheme: dark;
+
+  /* Brand-level CSS vars mirror Tailwind tokens for places that need
+     raw color (gradients, shadow stops, etc.). */
+  --rk-ink:        #070a12;
+  --rk-ink-panel:  #0e1320;
+  --rk-ink-subtle: #161d2e;
+  --rk-ink-line:   #1f2738;
+  --rk-fg:         #e6ecf5;
+  --rk-fg-muted:   #9aa6bd;
+  --rk-fg-dim:     #5b6885;
+  --rk-accent:     #38bdf8;
+  --rk-alert:      #f59e0b;
+  --rk-ok:         #34d399;
+  --rk-danger:     #f87171;
+}
+
+html,
+body,
+#root {
+  background-color: var(--rk-ink);
+  color: var(--rk-fg);
 }
 
 body {
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    "Helvetica Neue",
+    sans-serif;
+  font-feature-settings:
+    "ss01" on,
+    "cv11" on;
+  font-variant-ligatures: contextual;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
+code,
+kbd,
+samp,
+pre,
+.font-mono {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
+    Consolas, monospace;
+  font-variant-ligatures: none;
+}
+
+/* Subtle "data grid" hairline backdrop; readable, never noisy. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(45, 58, 90, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(45, 58, 90, 0.06) 1px, transparent 1px);
+  background-size: 56px 56px, 56px 56px;
+  background-position: -1px -1px;
+  z-index: 0;
+  mask-image: radial-gradient(circle at 50% 0%, rgba(0, 0, 0, 0.6), transparent 70%);
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+}
+
+::selection {
+  background: rgba(56, 189, 248, 0.32);
+  color: #ffffff;
+}
+
+/* Scroll bars: thin, on-brand, only visible on dark surface. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rk-ink-line) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--rk-ink-line);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--rk-ink-subtle);
+  background-clip: padding-box;
+}
+
+/* Markdown body inside the dossier renderer. */
 .prose-invert :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
-  color: #7aa2f7;
+  color: var(--rk-accent);
+}
+
+/* Forensic kbd chip — used by the (M4) command palette + shortcuts. */
+.rk-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 4px;
+  border: 1px solid var(--rk-ink-line);
+  background: var(--rk-ink-subtle);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--rk-fg-muted);
+}
+
+/* Quiet pulse for "live" indicators (e.g. Phase 5 collab activity). */
+.rk-live-dot {
+  position: relative;
+}
+.rk-live-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  background: var(--rk-ok);
+  opacity: 0.35;
+  animation: pulse-glow 2s ease-in-out infinite;
 }

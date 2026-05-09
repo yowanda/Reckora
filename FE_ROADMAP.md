@@ -43,7 +43,7 @@ default, `8px` panels, `12px` modals.
 | **M0** | FE roadmap committed                                                | ✅ done | This file. |
 | **M1** | Cache busting (Caddy headers; Vite hash already on)                 | ✅ done | `deploy/Caddyfile` — `/assets/*` immutable 1y, `/index.html` no-cache. |
 | **M2** | Admin create-member endpoint + SPA Members panel                    | ✅ done | `POST /api/v1/users` (admin only) + `/admin/members` page (admin-only nav link, list/create/promote/demote). |
-| **M3** | Forensic design tokens (Tailwind theme)                             | pending | Color, type, radius, shadow scales. |
+| **M3** | Forensic design tokens (Tailwind theme)                             | ✅ done | `tailwind.config.ts` + `index.css` — ink surfaces, cyan + amber accents, Inter/JetBrains Mono via Google Fonts, faint data grid backdrop, on-brand scrollbars. |
 | **M4** | Layout chrome: sidebar nav + breadcrumbs + global ⌘K command        | pending | Replace topbar; persistent nav. |
 | **M5** | Page-by-page restyle                                                | pending | Login, Subjects, Detail, NewInv, Mentions, Pins, Watching, Phase 5. |
 | **M6** | Polish: empty states, skeletons, errors, motion                     | pending | |
