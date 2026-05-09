@@ -41,7 +41,7 @@ default, `8px` panels, `12px` modals.
 | # | Milestone | Status | Notes |
 |---|---|---|---|
 | **M0** | FE roadmap committed                                                | ✅ done | This file. |
-| **M1** | Cache busting (Caddy headers; Vite hash already on)                 | ⏳ next  | `deploy/Caddyfile` headers. |
+| **M1** | Cache busting (Caddy headers; Vite hash already on)                 | ✅ done | `deploy/Caddyfile` — `/assets/*` immutable 1y, `/index.html` no-cache. |
 | **M2** | Admin create-member endpoint + SPA Members panel                    | pending | `POST /api/v1/users` (admin only) + UI. |
 | **M3** | Forensic design tokens (Tailwind theme)                             | pending | Color, type, radius, shadow scales. |
 | **M4** | Layout chrome: sidebar nav + breadcrumbs + global ⌘K command        | pending | Replace topbar; persistent nav. |

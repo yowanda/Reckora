@@ -31,6 +31,17 @@
         file_server
     }
 
+    # ── Cache busting ────────────────────────────────────────────────
+    # Vite emits hashed asset filenames (``index-<hash>.js`` etc.), so
+    # ``/assets/*`` is safe to cache aggressively forever. ``index.html``
+    # is the entrypoint that pins those hashes — it must always be
+    # revalidated so a redeploy is picked up by the next page load.
+    @assets path /assets/* /favicon.* /vite.svg /robots.txt
+    header @assets Cache-Control "public, max-age=31536000, immutable"
+
+    @spa_entry path / /index.html
+    header @spa_entry Cache-Control "no-cache, must-revalidate"
+
     header {
         # Modest hardening; tighten further once a CSP audit is done.
         X-Content-Type-Options "nosniff"
