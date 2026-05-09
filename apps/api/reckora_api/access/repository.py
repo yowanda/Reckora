@@ -90,6 +90,18 @@ CREATE TABLE IF NOT EXISTS subject_assignees(
 
 CREATE INDEX IF NOT EXISTS idx_subject_assignees_user
     ON subject_assignees(user_id);
+
+CREATE TABLE IF NOT EXISTS subject_watchers(
+    subject_id TEXT NOT NULL
+        REFERENCES subjects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL
+        REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_subject_watchers_user
+    ON subject_watchers(user_id, created_at, subject_id);
 """
 
 
@@ -113,6 +125,21 @@ class AssigneeRow:
     user_id: int
     assigned_by: int | None
     assigned_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class WatcherRow:
+    """One row in :meth:`AccessRepository.list_watchers`.
+
+    A watcher is a self-subscribed reader who has opted in to follow
+    a dossier. Watchers are independent of ownership / sharing /
+    assignment: revoking a share also wipes the watch (cascade), but
+    you can be a watcher without being assigned.
+    """
+
+    subject_id: str
+    user_id: int
+    created_at: str
 
 
 class AccessRepository:
@@ -293,6 +320,141 @@ class AccessRepository:
             (subject_id, user_id),
         ).fetchone()
         return row is not None
+
+    # -- watchers ---------------------------------------------------------
+
+    def add_watcher(
+        self,
+        subject_id: str,
+        user_id: int,
+        *,
+        created_at: str,
+    ) -> bool:
+        """Record that ``user_id`` is following ``subject_id`` (idempotent).
+
+        Returns ``True`` when a new row was inserted, ``False`` if the
+        user was already a watcher. The route layer treats both cases
+        as a successful 200 so an optimistic UI never has to special-case
+        the second click on the bell icon.
+
+        Watching is *not* a read grant — callers must verify
+        :meth:`can_read` (or admin) before exposing this method, the
+        same way the comments / labels / status endpoints gate writes.
+        """
+        cur = self._conn.execute(
+            """
+            INSERT OR IGNORE INTO subject_watchers(
+                subject_id, user_id, created_at
+            )
+            VALUES (?, ?, ?)
+            """,
+            (subject_id, user_id, created_at),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def remove_watcher(self, subject_id: str, user_id: int) -> bool:
+        """Stop following a dossier. Returns ``True`` if a row was removed."""
+        cur = self._conn.execute(
+            "DELETE FROM subject_watchers WHERE subject_id = ? AND user_id = ?",
+            (subject_id, user_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def list_watchers(self, subject_id: str) -> list[WatcherRow]:
+        """Return every watcher of ``subject_id``, oldest first.
+
+        ``user_id`` is the deterministic tiebreaker so two subscribes
+        in the same millisecond still come back in the same order on
+        every request — important for the UI's avatar stack.
+        """
+        # ISO-8601 timestamps sort lexicographically, and string
+        # ordering preserves the microsecond precision that
+        # ``datetime()`` (second-precision only) would discard — vital
+        # for the test that subscribes twice in the same wall second
+        # to deterministically come back in subscription order.
+        rows = self._conn.execute(
+            """
+            SELECT subject_id, user_id, created_at
+            FROM subject_watchers
+            WHERE subject_id = ?
+            ORDER BY created_at ASC, user_id ASC
+            """,
+            (subject_id,),
+        ).fetchall()
+        return [
+            WatcherRow(
+                subject_id=str(sid),
+                user_id=int(uid),
+                created_at=str(ts),
+            )
+            for sid, uid, ts in rows
+        ]
+
+    def is_watching(self, subject_id: str, user_id: int) -> bool:
+        """Cheap existence probe used by the per-dossier endpoint."""
+        row = self._conn.execute(
+            """
+            SELECT 1 FROM subject_watchers
+            WHERE subject_id = ? AND user_id = ?
+            """,
+            (subject_id, user_id),
+        ).fetchone()
+        return row is not None
+
+    def list_watched_summaries(
+        self,
+        user_id: int,
+        *,
+        limit: int = 50,
+    ) -> list[SavedDossierSummary]:
+        """Most-recently-watched dossiers belonging to ``user_id``.
+
+        Ordered by *subscription* time (most-recent watch first), not
+        by dossier creation time — the UI surfaces this as "My
+        watchlist", and the obvious user expectation is that the
+        last thing you starred sits at the top.
+
+        We re-use the visibility-aware shape of
+        :meth:`list_visible_summaries` so admin-flow and watch-flow
+        rows mix without conversion. Watching is gated behind
+        :meth:`can_read` at the route layer; we therefore don't
+        re-filter for visibility here — a watch row whose underlying
+        share / assignment was revoked simply hangs around until the
+        cascade fires (or the user explicitly un-watches).
+        """
+        if limit <= 0:
+            return []
+        rows: list[_VisibleRow] = self._conn.execute(
+            """
+            SELECT
+                s.id,
+                s.seed_kind,
+                s.seed_value,
+                s.identifiers_json,
+                s.created_at,
+                s.summary_md,
+                s.hypotheses_md,
+                COALESCE(
+                    (SELECT COUNT(*) FROM traces t WHERE t.subject_id = s.id), 0
+                ) AS trace_count,
+                COALESCE(
+                    (SELECT COUNT(*) FROM edges e WHERE e.subject_id = s.id), 0
+                ) AS edge_count,
+                COALESCE(
+                    (SELECT COUNT(*) FROM dossier_anchors a WHERE a.subject_id = s.id),
+                    0
+                ) AS anchor_count
+            FROM subjects s
+            JOIN subject_watchers w ON w.subject_id = s.id
+            WHERE w.user_id = :uid
+            ORDER BY w.created_at DESC, s.id DESC
+            LIMIT :limit
+            """,
+            {"uid": user_id, "limit": limit},
+        ).fetchall()
+        return [_row_to_summary(row) for row in rows]
 
     # -- comments ---------------------------------------------------------
 
