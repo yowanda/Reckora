@@ -113,12 +113,29 @@ CREATE TABLE IF NOT EXISTS subject_assignees(
 
 CREATE INDEX IF NOT EXISTS idx_subject_assignees_user
     ON subject_assignees(user_id);
+
+CREATE TABLE IF NOT EXISTS subject_comment_replies(
+    comment_id INTEGER PRIMARY KEY
+        REFERENCES subject_comments(id) ON DELETE CASCADE,
+    parent_comment_id INTEGER NOT NULL
+        REFERENCES subject_comments(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_subject_comment_replies_parent
+    ON subject_comment_replies(parent_comment_id);
 """
 
 
 @dataclass(frozen=True, slots=True)
 class CommentRow:
-    """One row in :meth:`AccessRepository.list_comments` / :meth:`get_comment`."""
+    """One row in :meth:`AccessRepository.list_comments` / :meth:`get_comment`.
+
+    ``parent_comment_id`` is ``None`` for top-level comments and the id
+    of the parent comment for replies. Threading is one-level deep —
+    a comment that is itself a reply cannot be the parent of another
+    reply (the route layer enforces this; the schema permits it but
+    no path materialises that state).
+    """
 
     id: int
     subject_id: str
@@ -126,6 +143,7 @@ class CommentRow:
     body: str
     created_at: str
     updated_at: str | None
+    parent_comment_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,6 +390,7 @@ class AccessRepository:
         body: str,
         *,
         created_at: str,
+        parent_comment_id: int | None = None,
     ) -> CommentRow:
         """Append a comment thread entry. Returns the persisted row.
 
@@ -379,6 +398,13 @@ class AccessRepository:
         round-tripping ``cur.lastrowid`` only) so the API can hand the
         full :class:`CommentRow` back to the caller without a separate
         SELECT — keeping the create endpoint a single transaction.
+
+        When ``parent_comment_id`` is provided the comment is recorded
+        as a reply via the ``subject_comment_replies`` side table. The
+        side-table approach lets us add threading without an ALTER on
+        the existing ``subject_comments`` schema; absence of a row in
+        the side table is the canonical signal that the comment is
+        top-level.
         """
         cur = self._conn.execute(
             """
@@ -389,10 +415,21 @@ class AccessRepository:
             """,
             (subject_id, author_user_id, body, created_at),
         )
-        self._conn.commit()
         comment_id = cur.lastrowid
         if comment_id is None:  # pragma: no cover - sqlite3 contract
+            self._conn.rollback()
             raise RuntimeError("INSERT did not yield a lastrowid")
+        if parent_comment_id is not None:
+            self._conn.execute(
+                """
+                INSERT INTO subject_comment_replies(
+                    comment_id, parent_comment_id
+                )
+                VALUES (?, ?)
+                """,
+                (int(comment_id), parent_comment_id),
+            )
+        self._conn.commit()
         return CommentRow(
             id=int(comment_id),
             subject_id=subject_id,
@@ -400,21 +437,26 @@ class AccessRepository:
             body=body,
             created_at=created_at,
             updated_at=None,
+            parent_comment_id=parent_comment_id,
         )
 
     def get_comment(self, comment_id: int) -> CommentRow | None:
         """Look up a single comment, used for delete-time authorisation."""
         row = self._conn.execute(
             """
-            SELECT id, subject_id, author_user_id, body, created_at, updated_at
-            FROM subject_comments
-            WHERE id = ?
+            SELECT
+                c.id, c.subject_id, c.author_user_id, c.body,
+                c.created_at, c.updated_at,
+                r.parent_comment_id
+            FROM subject_comments c
+            LEFT JOIN subject_comment_replies r ON r.comment_id = c.id
+            WHERE c.id = ?
             """,
             (comment_id,),
         ).fetchone()
         if row is None:
             return None
-        cid, sid, author_id, body, created_at, updated_at = row
+        cid, sid, author_id, body, created_at, updated_at, parent_id = row
         return CommentRow(
             id=int(cid),
             subject_id=str(sid),
@@ -422,20 +464,27 @@ class AccessRepository:
             body=str(body),
             created_at=str(created_at),
             updated_at=None if updated_at is None else str(updated_at),
+            parent_comment_id=None if parent_id is None else int(parent_id),
         )
 
     def list_comments(self, subject_id: str) -> list[CommentRow]:
         """Return every comment on ``subject_id``, oldest first.
 
         ``id`` is a deterministic tiebreaker so two comments inserted in
-        the same millisecond still come back in insertion order.
+        the same millisecond still come back in insertion order. The
+        result includes both top-level comments and replies; the route
+        layer is responsible for any tree projection / pagination.
         """
         rows = self._conn.execute(
             """
-            SELECT id, subject_id, author_user_id, body, created_at, updated_at
-            FROM subject_comments
-            WHERE subject_id = ?
-            ORDER BY datetime(created_at) ASC, id ASC
+            SELECT
+                c.id, c.subject_id, c.author_user_id, c.body,
+                c.created_at, c.updated_at,
+                r.parent_comment_id
+            FROM subject_comments c
+            LEFT JOIN subject_comment_replies r ON r.comment_id = c.id
+            WHERE c.subject_id = ?
+            ORDER BY datetime(c.created_at) ASC, c.id ASC
             """,
             (subject_id,),
         ).fetchall()
@@ -447,12 +496,81 @@ class AccessRepository:
                 body=str(body),
                 created_at=str(created_at),
                 updated_at=None if updated_at is None else str(updated_at),
+                parent_comment_id=None if parent_id is None else int(parent_id),
             )
-            for cid, sid, author_id, body, created_at, updated_at in rows
+            for cid, sid, author_id, body, created_at, updated_at, parent_id in rows
         ]
 
+    def list_replies(self, parent_comment_id: int) -> list[CommentRow]:
+        """Return every reply to ``parent_comment_id``, oldest first.
+
+        Powers the per-thread ``GET /comments/{cid}/replies`` endpoint.
+        Caller is responsible for verifying that the parent itself is
+        visible to the actor; this method does no authorisation.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT
+                c.id, c.subject_id, c.author_user_id, c.body,
+                c.created_at, c.updated_at,
+                r.parent_comment_id
+            FROM subject_comment_replies r
+            JOIN subject_comments c ON c.id = r.comment_id
+            WHERE r.parent_comment_id = ?
+            ORDER BY datetime(c.created_at) ASC, c.id ASC
+            """,
+            (parent_comment_id,),
+        ).fetchall()
+        return [
+            CommentRow(
+                id=int(cid),
+                subject_id=str(sid),
+                author_user_id=int(author_id),
+                body=str(body),
+                created_at=str(created_at),
+                updated_at=None if updated_at is None else str(updated_at),
+                parent_comment_id=None if parent_id is None else int(parent_id),
+            )
+            for cid, sid, author_id, body, created_at, updated_at, parent_id in rows
+        ]
+
+    def is_reply(self, comment_id: int) -> bool:
+        """``True`` if ``comment_id`` is itself a reply.
+
+        Used by the route layer to enforce one-level threading: the
+        parent of a new reply must not itself be a reply.
+        """
+        row = self._conn.execute(
+            "SELECT 1 FROM subject_comment_replies WHERE comment_id = ?",
+            (comment_id,),
+        ).fetchone()
+        return row is not None
+
     def delete_comment(self, comment_id: int) -> bool:
-        """Remove a comment. Returns ``True`` if a row was deleted."""
+        """Remove a comment. Returns ``True`` if a row was deleted.
+
+        Replies cascade with the parent: removing a top-level comment
+        also wipes every reply pointing at it. The cascade has to be
+        applied explicitly here because ``subject_comment_replies``
+        only declares ``ON DELETE CASCADE`` on its own row (which
+        clears the join table when the parent vanishes), not on the
+        reply comment itself in ``subject_comments``.
+
+        The one-level threading rule means we do not need to recurse
+        \u2014 a reply cannot itself have replies, so a single sweep is
+        always sufficient.
+        """
+        self._conn.execute(
+            """
+            DELETE FROM subject_comments
+            WHERE id IN (
+                SELECT comment_id
+                FROM subject_comment_replies
+                WHERE parent_comment_id = ?
+            )
+            """,
+            (comment_id,),
+        )
         cur = self._conn.execute(
             "DELETE FROM subject_comments WHERE id = ?",
             (comment_id,),
