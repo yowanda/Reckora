@@ -1,7 +1,6 @@
 # Reckora
 
-AI-native OSINT investigation system. Entity resolution, evidence-graph reasoning,
-explainable intelligence.
+AI-native OSINT investigation system. Entity resolution, evidence-graph reasoning, explainable intelligence.
 
 ## Install
 
@@ -9,708 +8,105 @@ explainable intelligence.
 uv sync --extra dev
 ```
 
-## Usage
+Optional extras (each is opt-in):
 
-Run an investigation and print the dossier:
+- `--extra screenshots` — Playwright + Chromium for forensic PNG capture.
+- `--extra neo4j` — Neo4j adapter for cross-subject graph queries.
+- `--extra embeddings` — `sentence-transformers` for semantic bio similarity.
+
+## CLI
 
 ```bash
+# Run an investigation; print the dossier (markdown by default).
 reckora investigate octocat --kind username
 reckora investigate example.com --kind domain --ai
-```
 
-Pick the dossier format with `--format md|json|html|pdf`, or write straight to
-a file (the format is inferred from the extension `.md` / `.json` / `.html` /
-`.pdf`):
-
-```bash
-reckora investigate https://github.com/octocat --kind url --output dossier.md
+# Pick the format / write to file (extension is enough — md / json / html / pdf).
 reckora investigate octocat --kind username --output dossier.html
-reckora investigate octocat --kind username --output dossier.pdf
-reckora investigate octocat --kind username --format html > dossier.html
-reckora investigate octocat --kind username --format pdf  > dossier.pdf
-```
+reckora investigate octocat --kind username --format pdf --output dossier.pdf
 
-The HTML dossier is fully self-contained (inline CSS, no external assets) so it
-opens straight from disk and supports light / dark mode. The PDF dossier is
-generated with reportlab (pure Python, no system libs) and mirrors the same
-structure: header → identifiers → traces → **timeline** → **anomalies** →
-correlation edges → optional AI summary / hypotheses, with clickable source /
-archive links.
-
-Every dossier (markdown / HTML / PDF) carries a chronological `## Timeline`
-section reconstructed from `Evidence.fetched_at`, sorted ascending with ties
-broken by `payload_sha256` so the order is deterministic. The JSON export
-and `GET /api/v1/subjects/{id}` surface the same data as a top-level
-`timeline[]` array so the frontend can reuse the projection without
-re-deriving it.
-
-Every dossier also carries an `## Anomalies` section populated by a
-rule-based detector (`reckora.anomaly.detect_anomalies(traces)`). It
-currently surfaces future-dated evidence, internal timestamp
-inconsistencies (`created_at` postdating `updated_at` or
-`Evidence.fetched_at`), expired domains (WHOIS / RDAP `expires_at` <
-observation), invalid phone numbers (`is_valid=False`), and display-name
-divergence across collectors. Findings are sorted high → low severity
-and cite the supporting payload SHAs so every claim stays auditable.
-JSON export and `GET /api/v1/subjects/{id}` surface the same data as a
-top-level `anomalies[]` array.
-
-Persist a dossier to the SQLite store and reopen it later:
-
-```bash
+# Persist to the SQLite store and reopen.
 reckora investigate octocat --kind username --save
 reckora list
-reckora show subj-...                                # md (default)
-reckora show subj-... --format pdf -o dossier.pdf    # md|json|html|pdf
-reckora delete subj-...
-```
+reckora show subj-...
 
-The store lives at `./reckora.db` by default; override with `--db PATH` or the
-`RECKORA_DB_PATH` environment variable.
-
-Mint a Wayback Machine snapshot for every evidence URL so the chain stays
-auditable even if the live page disappears (best-effort; off by default
-because each save round-trips to web.archive.org):
-
-```bash
+# Mint a Wayback snapshot per evidence URL.
 reckora investigate octocat --kind username --archive
-```
 
-Each `Trace.evidence.archive_url` then points at the durable snapshot, and
-the dossier renderers (markdown, JSON, HTML, PDF) include it next to the
-live source URL.
-
-Capture a forensic full-page PNG of every evidence URL via headless
-Chromium so the dossier can be reviewed offline (best-effort; off by
-default because it pulls a browser binary):
-
-```bash
-uv sync --extra screenshots
-uv run playwright install chromium
+# Capture forensic full-page PNGs (needs the screenshots extra).
 reckora investigate octocat --kind username --screenshot \
     --screenshots-dir ./screenshots
-```
 
-Each `Trace.evidence.screenshot_path` then points at the captured PNG, and
-all four dossier renderers (markdown, JSON, HTML, PDF) include the path /
-link next to the live source URL.
-
-Anchor a dossier's evidence into a single tamper-evident Merkle root and
-submit that root to the public OpenTimestamps calendar fleet so a third
-party can later prove "every byte of evidence captured at investigation
-time was already present at this Bitcoin block":
-
-```bash
+# Anchor evidence into a Merkle root + OpenTimestamps stamp.
 reckora investigate octocat --kind username --anchor --save
 reckora verify-anchor subj-...
-```
 
-`--anchor` builds a Bitcoin-style Merkle tree over each trace's
-`Evidence.payload_sha256` (sorted leaves, even-duplication, all-SHA-256
-nodes — interchangeable with the scheme `ots stamp` uses) and submits
-the root via `POST /digest` to the same public calendars
-[`a.pool.opentimestamps.org`](https://github.com/opentimestamps/opentimestamps-server),
-`b.pool.opentimestamps.org`, and `alice.btc.calendar.opentimestamps.org`
-that the upstream `ots` CLI defaults to. The resulting `Anchor` —
-`merkle_root`, sorted `leaf_hashes`, per-calendar receipts, and
-`created_at` — is persisted alongside the dossier (SQLite +
-`dossier_anchors` table; Neo4j as a `Subject.anchor_json` property) and
-rendered into a "Cross-trace anchor" section by every dossier format
-(markdown, HTML, JSON, PDF). `reckora verify-anchor` rehashes the
-saved traces from scratch and exits non-zero if the root no longer
-matches the persisted anchor — i.e. any post-hoc tampering with the
-saved evidence flips the dossier from `VERIFY: OK` to `VERIFY: FAIL`.
-Calendar failures are best-effort: even if every public calendar is
-down, the locally-computed root is still preserved so a verifier can
-re-derive it offline. The HTTP API exposes the same toggle via the
-`anchor: true` field on `POST /api/v1/investigations`. Submission only
-covers the *stamp* half of OpenTimestamps; upgrading the receipt to a
-full Bitcoin proof once the calendar's transaction confirms is a job
-for the standalone [`ots upgrade`](https://github.com/opentimestamps/opentimestamps-client)
-CLI, since waiting on Bitcoin confirmation is hours-to-days work and
-has no place in a synchronous investigation request.
+# AI reasoning: either set OPENAI_API_KEY, or log in with ChatGPT.
+reckora auth login    # OAuth + PKCE; runs on your ChatGPT subscription
+reckora auth status
+reckora auth refresh
+reckora auth logout
 
-Set `OPENAI_API_KEY` to enable `--ai` (LLM-generated summary + hypotheses,
-evidence-bounded with `ev:<8-hex>` citations). Alternatively, log in with
-your ChatGPT Plus / Pro account so the reasoning layer runs against your
-subscription instead of an OpenAI Platform billing tier:
-
-```bash
-reckora auth login    # opens auth.openai.com; redirects to localhost:1455
-reckora auth status   # show current login state
-reckora auth refresh  # rotate access_token using the stored refresh_token
-reckora auth logout   # forget credentials
-```
-
-The flow is the OAuth authorization-code + PKCE dance the official OpenAI
-Codex CLI ships with — Reckora reuses Codex's `client_id`
-(`app_EMoamEEZ73f0CkXaXp7hrann`) and the whitelisted
-`http://localhost:1455/auth/callback` redirect URI. The resulting
-`access_token` is used as a Bearer credential against
-`https://chatgpt.com/backend-api/codex/responses` (the same Responses API
-Codex itself talks to), so the reasoning layer runs on your ChatGPT
-subscription instead of a separate `api.openai.com` billing tier.
-Credentials persist at `~/.config/reckora/auth.json` (mode `0600`,
-`$XDG_CONFIG_HOME` honoured); the access token auto-refreshes both
-proactively (when it's within ~2 minutes of expiry) and on the first
-401 from Codex. If both `OPENAI_API_KEY` and a stored login are
-present, the API key wins so existing deploys keep their previous
-behaviour.
-
-The Codex backend exposes a different model lineup than `api.openai.com`
-(no `gpt-4o-mini`); override the OAuth-mode model with the
-`RECKORA_OPENAI_OAUTH_MODEL` env var (default `gpt-5.1-codex-mini`).
-
-## Breach lookup (Have I Been Pwned)
-
-Reckora ships an opt-in `BreachCollector` that resolves an `email`
-identifier against the [Have I Been Pwned v3 API](https://haveibeenpwned.com/API/v3).
-It is **off by default** (no network calls, no PII leaving the host)
-and only fires when you both pass `--breach` AND set `HIBP_API_KEY` —
-either of those missing degrades silently to an empty trace list so
-investigations stay deterministic on hosts without a key.
-
-```bash
-export HIBP_API_KEY="hibp_..."
+# Opt-in HIBP breach lookup (requires HIBP_API_KEY).
 reckora investigate alice@example.com --kind email --breach
 ```
 
-The emitted trace normalises to a flat schema the dossier renderers can
-read without parsing nested arrays at render time:
-`email`, `breach_count`, `first_breach_date`, `latest_breach_date`,
-`data_classes` (sorted union across all breaches), `has_sensitive_breach`,
-and `breaches[]` (per-breach summary with `name`, `domain`, `breach_date`,
-`pwn_count`, `data_classes`, `is_verified`, `is_sensitive`, ...).
+Supported `--kind` values: `username`, `email`, `domain`, `url`, `phone`, `wallet` (BTC / ETH / SOL), `avatar` (image URL).
 
-The raw HIBP response is **never** inlined into the evidence row
-(`keep_raw=False`) — only the SHA-256 of the canonicalised payload is
-preserved, so the chain stays auditable without spilling per-breach PII
-into the saved dossier. The HTTP API exposes the same toggle via the
-`breach: true` field on `POST /api/v1/investigations`.
+Active collectors (default orchestrator): GitHub, Hacker News, Keybase, Gravatar, WHOIS / RDAP, web profile, phone (offline `phonenumbers`), wallet (Blockstream Esplora / Etherscan / Solana mainnet-beta JSON-RPC), avatar perceptual hash, opt-in HIBP breach.
 
-## Bitcoin wallet identifiers
-
-Reckora ships a `BitcoinChainCollector` that resolves a `wallet` identifier
-against the public [Blockstream Esplora API](https://github.com/Blockstream/esplora/blob/master/API.md)
-— no API key, no registration, just an HTTP gateway in front of an
-Esplora-indexed Bitcoin node. The collector is wired into the default
-orchestrator (CLI and HTTP API), so any seed of `--kind wallet` that
-parses as a Bitcoin mainnet address triggers it automatically.
-
-```bash
-# Legacy (P2PKH)
-reckora investigate "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa" --kind wallet
-
-# SegWit (P2WPKH / P2WSH)
-reckora investigate "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4" --kind wallet
-
-# Taproot (P2TR)
-reckora investigate "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr" --kind wallet
-```
-
-The emitted trace normalises to a flat schema the dossier renderers can
-read without parsing the raw envelope at render time:
-`address`, `chain` (`"bitcoin"`), `network` (`"mainnet"`), `address_format`
-(`p2pkh` / `p2sh` / `bech32` / `bech32m`), `confirmed_tx_count`,
-`mempool_tx_count`, `tx_count`, `total_received_satoshi`,
-`total_spent_satoshi`, `current_balance_satoshi`, `current_balance_btc`
-(string-formatted, no float drift), `mempool_balance_satoshi`,
-`is_active`. A 404 from Blockstream — i.e. the address has never been
-seen on chain — still emits a Trace with `is_active=False`, because the
-absence of activity is itself an intelligence finding rather than a
-collection failure.
-
-The collector silently no-ops on `wallet` strings that are not Bitcoin
-mainnet addresses (e.g. an Ethereum hex address) so future wallet
-adapters that also support `IdentifierType.WALLET` can coexist in the
-orchestrator.
-
-The raw HTTP envelope is **never** inlined into the evidence row
-(`keep_raw=False`) — only the SHA-256 of the canonicalised payload is
-preserved, so the chain stays auditable without bloating the saved
-dossier with on-chain detail. The HTTP API enables the same collector
-automatically — any `POST /api/v1/investigations` with a `wallet`-kind
-seed routes through it.
-
-## Ethereum wallet identifiers
-
-Alongside Bitcoin, Reckora ships an `EthereumChainCollector` that resolves
-a `wallet` identifier against the public
-[Etherscan API](https://docs.etherscan.io/). The collector works on the
-anonymous tier (no key required) so it is wired into the default
-orchestrator unconditionally — passing `ETHERSCAN_API_KEY` simply lifts
-the rate limit, it is not a feature flag.
-
-```bash
-# Vitalik's well-known address (mainnet, EIP-55-checksummed):
-reckora investigate "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045" --kind wallet
-
-# Lowercase form is accepted too — checksum is purely a display convention.
-reckora investigate "0xd8da6bf26964af9d7eed9e03e53415d37aa96045" --kind wallet
-```
-
-The emitted trace normalises to a flat schema the dossier renderers can
-read without parsing the raw envelope at render time:
-`address` (lower-cased so identifier joins are case-insensitive),
-`address_input` (original casing, preserved verbatim for display so a
-user-supplied EIP-55 checksum survives round-tripping), `chain`
-(`"ethereum"`), `network` (`"mainnet"`), `address_format` (`"evm"` —
-shared across every EVM-compatible chain so a future Polygon /
-Arbitrum / Base adapter can reuse the schema unchanged), `balance_wei`,
-`balance_eth` (string-formatted with full 18-decimal precision, no
-float drift), `outgoing_tx_count` (account nonce — exactly the number
-of external txs the EOA has originated), `is_active`.
-
-The collector silently no-ops on `wallet` strings that are not
-EVM-shaped (e.g. a Bitcoin or Solana address) so the BTC and SOL
-adapters (plus any future Cosmos / TRON collector) coexist cleanly on
-`IdentifierType.WALLET`. Two Etherscan endpoints (`account/balance` and
-`proxy/eth_getTransactionCount`) are combined into a single Trace; the
-raw HTTP envelopes are dropped from evidence (`keep_raw=False`) and the
-SHA-256 of the canonicalised combined payload is preserved as the
-audit anchor. Etherscan's "Invalid address format" responses are
-treated as no-ops; quota / rate-limit responses are surfaced upstream
-so the orchestrator's per-collector logger records them once and the
-investigation continues without this collector's data.
-
-## Solana wallet identifiers
-
-Alongside Bitcoin and Ethereum, Reckora ships a `SolanaChainCollector`
-that resolves a `wallet` identifier against the public Solana mainnet-beta
-JSON-RPC at `https://api.mainnet-beta.solana.com` — no API key, no
-registration, just the anonymous public RPC tier. The collector is wired
-into the default orchestrator (CLI and HTTP API) so any seed of
-`--kind wallet` whose base58 form decodes to a 32-byte ed25519 public
-key triggers it automatically.
-
-```bash
-# System program (the canonical "all-zero" Solana account):
-reckora investigate "11111111111111111111111111111111" --kind wallet
-
-# Wrapped SOL mint:
-reckora investigate "So11111111111111111111111111111111111111112" --kind wallet
-```
-
-The emitted trace normalises to a flat schema the dossier renderers can
-read without parsing the raw RPC envelope at render time:
-`address` (original on-chain string — base58 is case-sensitive so the
-original casing is preserved verbatim, unlike EVM hex), `chain`
-(`"solana"`), `network` (`"mainnet"`), `address_format` (`"ed25519"`
-— shared across every Solana account so a future devnet / testnet
-adapter can reuse the schema unchanged), `balance_lamports` (int) and
-`balance_sol` (string-formatted with full 9-decimal precision, no
-float drift), `latest_signature` plus `latest_signature_block_time`
-and `latest_signature_at` (ISO-8601 UTC) for the most recent
-transaction touching the account, and `is_active` — True iff the
-balance is positive **or** the account has ever appeared in a
-confirmed signature, so a fully-drained address still surfaces as
-formerly-active rather than vanishing from the dossier.
-
-The shape check is a tiny pure-Python base58 decoder that requires the
-decoded payload to be **exactly 32 bytes**. That cleanly excludes
-Bitcoin legacy / P2SH addresses (25 bytes) without resorting to length
-heuristics, so the BTC, EVM, and SOL collectors stay in their own
-lanes on `IdentifierType.WALLET`. Two RPC methods (`getBalance` and
-`getSignaturesForAddress` with `limit=1`) are combined into a single
-Trace; the raw JSON-RPC envelopes are dropped from evidence
-(`keep_raw=False`) and the SHA-256 of the canonicalised combined
-payload is preserved as the audit anchor. RPC error `-32602` (invalid
-param: WrongSize / decode failure) is treated as a no-op so the
-orchestrator's per-collector try/except never has to swallow a 4xx;
-any other RPC error code, plus 5xx responses, are surfaced upstream
-so the orchestrator's per-collector logger records them once and the
-investigation continues without this collector's data.
-
-## Avatar identifiers
-
-The bundled `AvatarCollector` resolves an `IdentifierType.AVATAR` whose
-value is an `http(s)://` image URL — fetching the bytes, decoding via
-Pillow, and computing the perceptual-hash family the correlation
-engine's `avatar_phash` rule already consumes. Until now nothing wrote
-that field; this collector closes the loop so a profile picture URL
-shared across two subjects produces a `same_avatar` edge automatically.
-
-```bash
-reckora investigate "https://avatars.githubusercontent.com/u/583231?v=4" --kind avatar
-```
-
-The emitted trace normalises to a flat schema the dossier renderers can
-read without parsing the raw envelope at render time:
-`url`, `content_type` (server-reported MIME, lower-cased and stripped
-of any parameters), `bytes_size`, `bytes_sha256` (content-hash of the
-raw bytes — distinct from the evidence chain's payload SHA so dossiers
-can dedupe identical avatars across subjects), `width`, `height`,
-`mode` (Pillow's `RGB` / `RGBA` / `L` / `P` / …), `format` (`PNG` /
-`JPEG` / `GIF` / …), `avatar_phash` (64-bit dHash hex — the field the
-existing `avatar_phash` correlation rule reads),
-`avatar_phash_perceptual` (DCT-based pHash, more robust to recolouring
-/ global brightness shifts; surfaced in the dossier today and reserved
-for future correlation rules), `avatar_ahash` (cheap average-hash
-sanity check), `is_active`.
-
-The collector silently no-ops on non-`http(s)` identifier values
-(`data:` URIs, raw paths, unsupported schemes), 4xx responses (typo'd
-URL, hot-link block, deleted avatar, auth-walled image — the absence
-of an avatar is itself an intelligence finding rather than a
-collection failure), non-`image/*` content-types (an HTML 200 from a
-paywall / redirect to login), bytes Pillow refuses to decode, and
-bodies larger than the configurable 5 MiB cap (so a malicious server
-can't OOM the host). 5xx responses are surfaced upstream so the
-orchestrator's per-collector logger records them once.
-
-The raw image bytes are **never** inlined into the evidence row
-(`keep_raw=False`) — only the SHA-256 of the canonicalised normalised
-payload is preserved, so the chain stays auditable without bloating
-the saved dossier with binary blobs.
-
-## Hacker News usernames
-
-Alongside GitHub, Reckora ships a `HackerNewsCollector` that resolves a
-`username` Identifier against the public
-[Hacker News Firebase API](https://github.com/HackerNews/API) at
-`https://hacker-news.firebaseio.com/v0/user/{id}.json` — no API key, no
-registration, just the same anonymous read-only endpoint the official HN
-apps use. The collector is wired into the default orchestrator so any
-seed of `--kind username` whose value matches an HN account triggers it
-automatically.
-
-```bash
-reckora investigate pg --kind username
-```
-
-The emitted trace normalises to a flat schema the dossier renderers can
-read without parsing the raw envelope at render time:
-`platform` (`"hackernews"`), `username` (server-canonical form, falls
-back to the requested value), `profile_url`
-(`https://news.ycombinator.com/user?id=<username>`), `bio` (HTML stripped
-and entities decoded so the `bio_similarity` correlation rule sees
-readable prose), `bio_html` (the raw `about` blob preserved for
-renderers that want to display it), `karma`, `submission_count`,
-`created_at` (ISO-8601 UTC, lifted from the `created` epoch), and
-`is_active` — true if the account has karma above HN's 1-point default
-or has ever submitted a story / comment, false for accounts that
-registered but never posted.
-
-The collector silently no-ops on `username` strings whose shape can't
-match an HN account (HN allows 2–15 characters of `[A-Za-z0-9_-]`), so
-it coexists cleanly with the GitHub username collector, the Bitcoin /
-Ethereum / Solana wallet collectors that ride on `IdentifierType.WALLET`
-indirectly, and any future username adapters. A literal JSON `null`
-response from the HN endpoint (HN's signal for "no such account") is
-treated the same as a 404 — no trace is emitted and the orchestrator
-moves on. The raw HTTP envelope is **never** inlined into the evidence
-row (`keep_raw=False`) — only the SHA-256 of the canonicalised payload
-is preserved, so the chain stays auditable without bloating the saved
-dossier with multi-thousand-element `submitted` arrays.
-
-## Keybase usernames
-
-Alongside GitHub and Hacker News, Reckora ships a `KeybaseCollector`
-that resolves a `username` Identifier against the public
-[Keybase user-lookup endpoint](https://keybase.io/docs/api/1.0/call/user/lookup)
-at `https://keybase.io/_/api/1.0/user/lookup.json?usernames={id}` — no
-API key, no registration, just the same anonymous read-only endpoint
-the public `keybase` CLI hits for `keybase id <user>`. The collector
-is wired into the default orchestrator (CLI and HTTP API) so any seed
-of `--kind username` that matches a Keybase account triggers it
-automatically.
-
-```bash
-reckora investigate chrisco --kind username
-```
-
-Keybase is a high-signal collector for OSINT correlation because the
-platform is itself an *aggregator* of identity proofs: a single
-Keybase profile typically links a Twitter handle, GitHub account,
-Reddit account, one or more DNS-based domain proofs, and a PGP public
-key, all signed by the same device key. Surfacing those linked
-accounts as a structured `proofs` array lets the correlation engine
-pivot from one identifier to another without ever scraping a profile
-page.
-
-The emitted trace normalises to a flat schema the dossier renderers
-can read without parsing the raw envelope at render time: `platform`
-(`"keybase"`), `username` (server-canonical lowercase form, falls back
-to the requested value), `profile_url` (`https://keybase.io/<username>`),
-`display_name`, `bio`, `location`, `created_at` (ISO-8601 UTC, lifted
-from the `ctime` epoch), `proofs` (list of
-`{platform, identity, url}` for every *currently-live* identity proof
-— pending, revoked or permanently failed proofs are filtered out so
-they never feed correlation), `has_pgp_key` plus `pgp_fingerprint`
-when the account has published a primary key, and `is_active` — true
-if Keybase sees any verified identity signal (live proof, PGP key, or
-filled-out profile), false for accounts that registered but never
-linked anything.
-
-The collector silently no-ops on `username` strings whose shape can't
-match a Keybase account (Keybase allows 2–16 characters of
-`[A-Za-z0-9_]`, no hyphens), so it coexists with the GitHub / HN
-collectors and the wallet collectors that ride on
-`IdentifierType.WALLET`. Casing drift in the seed is normalised before
-the round-trip — Keybase canonicalises every username to lowercase
-server-side, but the `usernames=` query parameter is *case-sensitive*
-in the validation step and would otherwise return a silent
-`INPUT_ERROR`. Lookup misses are reported by Keybase through
-`status.code != 0` (typically `100` = `INPUT_ERROR`) **and** through a
-literal `null` entry inside the `them[]` array even when the envelope
-is OK — the collector treats both signals the same way the GitHub /
-HN collectors treat a 404. The raw HTTP envelope is **never** inlined
-into the evidence row (`keep_raw=False`) — only the SHA-256 of the
-canonicalised payload is preserved, so the chain stays auditable
-without bloating the saved dossier with multi-KB device chains and
-public-key bundles.
-
-## Gravatar emails
-
-Email addresses are first-class identifiers. The bundled
-`GravatarCollector` resolves an `email` Identifier against the public
-[Gravatar profile JSON endpoint](https://docs.gravatar.com/api/profiles/json/)
-at `https://www.gravatar.com/{md5_hash}.json` — no API key, no
-registration. Gravatar derives the lookup hash from the *trimmed,
-lowercased* email address (per its documented hashing rules), so the
-collector hashes locally before hitting the network and the plaintext
-email never leaves the process. The collector is wired into the default
-orchestrator (CLI and HTTP API) so any seed of `--kind email` that
-matches a Gravatar account triggers it automatically.
-
-```bash
-reckora investigate alice@example.com --kind email
-```
-
-Gravatar is high-signal for OSINT correlation because the identifier
-is not the email itself but its hash: a positive match yields a
-display name, preferred username, location, bio, profile photo URL,
-**and** an `accounts[]` array of verified linked accounts (Twitter,
-GitHub, LinkedIn, …) that the entity-resolution layer can fan out from.
-The collector also surfaces the canonical `profile_photo_url` so the
-existing avatar-perceptual-hash collector can pick it up via a fresh
-URL identifier without needing a separate scrape pass.
-
-The emitted trace normalises to a flat schema the dossier renderers
-can read without parsing the raw envelope at render time: `platform`
-(`"gravatar"`), `email_hash` (the canonical MD5 — the collector never
-stores the plaintext email in the trace, so dossiers never leak PII),
-`profile_url` (defaulting to `https://www.gravatar.com/{hash}` if the
-response omits a fully-qualified URL), `preferred_username`,
-`display_name`, `bio`, `location`, `profile_photo_url` (preferring
-`thumbnailUrl`, falling back to the first entry of `photos[]`, then
-`avatar_url`), `accounts` (list of `{platform, username, url}` for
-every linked account that supplies all three fields — partial entries
-are dropped so they never feed correlation), and `is_active` — true if
-Gravatar exposes any concrete public-facing claim (display name,
-preferred username, bio, or at least one verified linked account),
-false for hash-only accounts that registered but never filled out a
-profile.
-
-The collector silently no-ops on `email` strings whose shape isn't a
-valid email (no `@` after trimming, empty after trimming), so it
-coexists with collectors that ride on other identifier types. Lookup
-misses are reported by Gravatar through both an HTTP `404` **and** a
-literal JSON string `"User not found"` (sometimes served with a `200`
-status from CDN caches) — the collector treats both signals the same
-way the GitHub / HN / Keybase collectors treat a 404. The raw HTTP
-envelope is **never** inlined into the evidence row (`keep_raw=False`)
-— only the SHA-256 of the canonicalised payload is preserved, so the
-chain stays auditable without bloating the saved dossier with long
-bios, multiple linked accounts, and embedded URLs.
-
-## Phone identifiers
-
-Phone numbers are first-class identifiers. The bundled `PhoneCollector` is
-fully offline — it relies on `phonenumbers` (libphonenumber's Python port,
-which ships its own metadata database) so investigations stay deterministic
-and don't leak the number to any third party.
-
-```bash
-# International form (any locale):
-reckora investigate "+12025550123" --kind phone
-
-# National form needs a default region; pass it via the orchestrator if
-# you script Reckora as a library (the CLI defaults to "US").
-```
-
-The emitted trace normalises to: `e164`, `country_code`, `country_iso`,
-`country_name`, `region`, `carrier_name`, `line_type`
-(`mobile` / `fixed_line` / `voip` / `toll_free` / ...), `is_valid`,
-`is_possible`. Numbers that fail to parse never abort the investigation —
-the collector returns no traces and the orchestrator logs the miss.
-
-## Embedding-based bio similarity
-
-The default `bio_similarity` correlation rule runs on lexical
-token-cosine — fast, dependency-free, and hermetic for tests, but blind
-to synonyms ("infosec engineer" ↔ "security researcher" share zero
-tokens despite describing the same role). For deeper semantic matches,
-Reckora ships an optional `[embeddings]` extra that pulls in
-`sentence-transformers`:
-
-```bash
-uv sync --extra embeddings
-```
-
-Wire an embedder through `correlate(traces, bio_embedder=...)` (or
-through `AgentLoop(... bio_embedder=...)`) and the bio rule swaps token
-cosine for dense-vector cosine on the same `EdgeKind.SIMILAR_BIO`:
-
-```python
-from reckora.correlation import SentenceTransformerEmbedder, correlate
-
-# Lazy-loads sentence-transformers/all-MiniLM-L6-v2 on first encode().
-edges = correlate(traces, bio_embedder=SentenceTransformerEmbedder())
-```
-
-`BioEmbedder` is a runtime-checkable `Protocol`, so any object exposing
-`embed_one(text: str) -> list[float]` slots in — Reckora does not
-hard-code the `sentence-transformers` import path on a host that did
-not opt in to the extra. If an embedder declines a string (returns
-`[]`), the bio rule transparently falls back to its lexical baseline
-rather than producing a spurious zero score.
-
-## Autonomous agent loop (Phase 4)
-
-`AgentLoop` (`reckora.agent.AgentLoop`) drives Reckora's collect →
-correlate pipeline recursively: starting from a seed identifier it (1)
-runs the orchestrator once to bootstrap a working set, (2) asks the
-reasoning layer to propose follow-up identifiers worth investigating
-(each citing the `ev:<8-hex>` payload prefixes that justify it), (3)
-runs the proposed plan through a rule-based `Verifier` that drops
-malformed, unsupported, already-visited, or unevidenced proposals,
-and (4) re-correlates the full trace set and retains only the
-candidates whose strongest correlation edge to the prior graph is at
-or above the configured `confidence_floor`. The loop terminates as
-soon as an iteration produces no retained identifiers, or
-`max_iterations` is reached:
-
-```python
-import asyncio
-from reckora.agent import AgentLoop
-from reckora.correlation import SentenceTransformerEmbedder
-from reckora.models.entity import Identifier
-from reckora.models.enums import IdentifierType
-from reckora.orchestrator import Orchestrator
-from reckora.reasoning.client import ReasoningClient
-
-orch = Orchestrator([...])  # the same collectors the CLI uses
-client = ReasoningClient()  # honours OPENAI_API_KEY *or* a `reckora auth login`
-loop = AgentLoop(
-    orch,
-    client,
-    max_iterations=3,
-    confidence_floor=0.5,
-    bio_embedder=SentenceTransformerEmbedder(),  # optional
-)
-result = asyncio.run(loop.run(Identifier(type=IdentifierType.USERNAME, value="alice")))
-
-for step in result.transcript:
-    print(step.iteration, step.accepted, step.retained, step.confidence_dropped)
-```
-
-Two gates protect callers from a misbehaving LLM: the verifier rejects
-proposals that don't parse, name unknown identifier kinds, are already
-in the visited set, point at unsupported collectors, or cite no real
-evidence; the post-collection confidence-floor gate then drops any
-*verifier-accepted* identifier whose strongest correlation edge to the
-existing graph is below `confidence_floor`. The loop's
-`AgentLoopResult.transcript` records the raw plan, every rejection,
-every confidence-floor drop and every retained trace per iteration so
-investigators can audit *why* the agent expanded (or refused to
-expand) the search space.
-
-The agent layer reuses the same `ReasoningClient` the dossier uses, so
-it runs unchanged on either `OPENAI_API_KEY` or a `reckora auth login`
-ChatGPT OAuth credential.
-
-## Optional Neo4j backend
-
-`SQLiteSubjectRepository` is the default store. For environments that want
-graph-native cross-subject queries (e.g. "every dossier that ever touched
-this email"), Reckora ships an optional Neo4j adapter behind the same
-`SubjectRepository` seam:
-
-```bash
-uv sync --extra neo4j
-```
-
-```python
-from neo4j import GraphDatabase
-from reckora.persistence import Neo4jSubjectRepository
-
-driver = GraphDatabase.driver(
-    "bolt://localhost:7687",
-    auth=("neo4j", "secret"),
-)
-repo = Neo4jSubjectRepository(driver, database="reckora")
-# same surface as SQLiteSubjectRepository:
-#   repo.save(subject=..., traces=..., edges=...)
-#   repo.get(subject_id)
-#   repo.list_recent(limit=20)
-#   repo.delete(subject_id)
-```
-
-The graph maps `(:Subject)-[:HAS_IDENTIFIER]->(:Identifier)` with
-`Identifier` nodes shared across subjects, so a follow-up Cypher query like
-`MATCH (i:Identifier {value: 'bob@example.com'})<-[:HAS_IDENTIFIER]-(s:Subject)
-RETURN s` lists every saved investigation that touched that identifier —
-something the relational backend cannot express. Trace and edge JSON is
-stored verbatim on subject-owned `(:TraceNode)` / `(:EdgeNode)` children so
-the round-trip preserves bit-for-bit Pydantic fidelity.
+Every dossier — markdown / HTML / JSON / PDF — carries `## Timeline`, `## Anomalies`, an optional `## Cross-trace anchor`, and clickable evidence + Wayback / screenshot links. The same projection is exposed at `GET /api/v1/subjects/{id}` so the frontend can reuse it without re-deriving.
 
 ## HTTP API
 
-Reckora ships a FastAPI backend (`apps/api/reckora_api`) that wraps the same
-engine the CLI uses. The web frontend (Vite + React + TS, see
-[ROADMAP](./ROADMAP.md)) consumes this API as its sole backend.
-
-Generate a JWT secret and bootstrap the first **admin** (the CLI defaults to
-`--admin` so the operator-bootstrap flow keeps working; pass `--viewer` to
-create a non-privileged user instead):
+The FastAPI backend (`apps/api/reckora_api`) wraps the same engine. JWT bearer auth; OpenAPI at `/openapi.json`, Swagger at `/docs`, health at `/healthz`.
 
 ```bash
 export RECKORA_API_JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-reckora-api create-user root --password 'supersecret123'           # admin
-reckora-api create-user alice --password 'alicepassword1' --viewer  # viewer
+reckora-api create-user root  --password 'supersecret123'             # admin
+reckora-api create-user alice --password 'alicepassword1' --viewer    # viewer
 reckora-api serve --host 127.0.0.1 --port 8000
 ```
-
-OpenAPI is at <http://127.0.0.1:8000/openapi.json>; Swagger UI at
-<http://127.0.0.1:8000/docs>; health probe at `/healthz`.
-
-Authenticate and run an investigation end-to-end with `curl`:
 
 ```bash
 TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/v1/auth/token \
   -H 'content-type: application/x-www-form-urlencoded' \
-  -d 'username=alice&password=supersecret123' | jq -r .access_token)
+  -d 'username=alice&password=alicepassword1' | jq -r .access_token)
 
 curl -s -X POST http://127.0.0.1:8000/api/v1/investigations \
-  -H "authorization: Bearer $TOKEN" \
-  -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"seed": {"kind": "username", "value": "octocat"}}'
 
-curl -s -H "authorization: Bearer $TOKEN" \
-  http://127.0.0.1:8000/api/v1/subjects
-
-# Download a PDF dossier for a saved subject:
 curl -s -H "authorization: Bearer $TOKEN" \
   "http://127.0.0.1:8000/api/v1/subjects/<subject-id>/dossier?format=pdf" \
   -o dossier.pdf
 ```
 
-Endpoints (all under `/api/v1`, all require `Authorization: Bearer <token>`
-except `/auth/register` and `/auth/token`):
+### Endpoints
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/auth/register` | create a user (username + password ≥ 8 chars) |
-| POST | `/auth/token` | OAuth2-form login → JWT access token |
-| GET  | `/auth/me` | current user identity |
-| POST | `/investigations` | run orchestrator + persist (`archive`, `screenshot`, `ai`, `breach` flags) |
-| GET  | `/subjects` | list saved dossiers (`?limit=`) |
-| GET  | `/subjects/{id}` | full saved dossier as JSON |
-| GET  | `/subjects/{id}/dossier?format=html\|json\|md\|pdf` | render dossier |
-| DELETE | `/subjects/{id}` | drop a saved dossier |
+All under `/api/v1`; all require `Authorization: Bearer <token>` except `/auth/register` and `/auth/token`.
 
-Configuration (env vars, all optional except the secret):
+| Group | Endpoints |
+|---|---|
+| Auth & users | `POST /auth/register`, `POST /auth/token`, `GET /auth/me`, `GET /users`, `PATCH /users/{id}/role` |
+| Investigations | `POST /investigations` (flags: `archive`, `screenshot`, `ai`, `breach`, `anchor`) |
+| Dossiers | `GET /subjects` · `GET /subjects/{id}` · `GET /subjects/{id}/dossier?format=html\|json\|md\|pdf` · `DELETE /subjects/{id}` |
+| Sharing | `POST /subjects/{id}/share`, `DELETE /subjects/{id}/share/{user_id}` |
+| Cross-references | `GET /subjects/{id}/cross-references` |
+| Activity feed | `GET /subjects/{id}/activity` |
+| Comments + threading | `GET/POST /subjects/{id}/comments` · `PATCH/DELETE /subjects/{id}/comments/{cid}` · `GET /subjects/{id}/comments/{cid}/replies` |
+| Reactions | `GET /subjects/{id}/comments/{cid}/reactions` · `PUT/DELETE /subjects/{id}/comments/{cid}/reactions/{key}` |
+| Mentions feed | `GET /me/mentions` |
+| Assignees | `GET/POST /subjects/{id}/assignees` · `DELETE /subjects/{id}/assignees/{uid}` |
+| Labels | `GET /subjects/{id}/labels` · `PUT/DELETE /subjects/{id}/labels/{label}` · `GET /labels` |
+| Status | `GET/PUT /subjects/{id}/status` · `GET /status` |
+| Watchers / following | `GET /subjects/{id}/watchers` · `PUT/DELETE /subjects/{id}/watchers/me` · `GET /me/watching` |
+| Pinned dossiers | `GET/POST /me/pins` · `DELETE /me/pins/{subject_id}` |
+| Private notes | `GET/PUT/DELETE /subjects/{id}/notes/me` |
+| Visits + unread | `POST/GET /subjects/{id}/visits/me` · `GET /subjects/{id}/unread` |
+| TODO checklist | `GET/POST /subjects/{id}/todos/me` · `PATCH/DELETE /subjects/{id}/todos/me/{todo_id}` |
+
+### Configuration (env vars)
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -720,11 +116,11 @@ Configuration (env vars, all optional except the secret):
 | `RECKORA_API_CORS_ORIGINS` | `http://localhost:5173` | comma-separated allow-list |
 | `RECKORA_API_DOCS_ENABLED` | `true` | toggle `/docs` and `/openapi.json` |
 | `RECKORA_DB_PATH` | `./reckora.db` | shared SQLite file (CLI + API) |
-| `RECKORA_API_SCREENSHOTS_DIR` | `screenshots` | filesystem dir for captured PNGs |
-| `RECKORA_API_SCREENSHOTS_URL_PREFIX` | `/screenshots` | URL prefix at which the API serves PNGs |
-| `HIBP_API_KEY` | _(unset)_ | Have I Been Pwned API key (enables `--breach` / `breach: true`) |
-| `ETHERSCAN_API_KEY` | _(unset)_ | Etherscan API key — optional; lifts the anonymous tier's rate limit for the Ethereum wallet collector |
-| `RECKORA_OPENAI_OAUTH_MODEL` | `gpt-5.1-codex-mini` | Model used when the reasoning layer runs on a ChatGPT OAuth login instead of `OPENAI_API_KEY` |
+| `RECKORA_API_SCREENSHOTS_DIR` | `screenshots` | dir for captured PNGs |
+| `RECKORA_API_SCREENSHOTS_URL_PREFIX` | `/screenshots` | URL prefix for served PNGs |
+| `HIBP_API_KEY` | _(unset)_ | enables `--breach` / `breach: true` |
+| `ETHERSCAN_API_KEY` | _(unset)_ | lifts the anonymous tier rate limit |
+| `RECKORA_OPENAI_OAUTH_MODEL` | `gpt-5.1-codex-mini` | model used over ChatGPT OAuth |
 
 ## Roadmap
 
