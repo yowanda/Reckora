@@ -56,6 +56,7 @@ from reckora_api.deps import (
     get_subject_repo,
     get_user_repo,
 )
+from reckora_api.mentions.parser import extract_mentions
 
 comments_router = APIRouter(prefix="/subjects/{subject_id}/comments", tags=["collab"])
 assignees_router = APIRouter(prefix="/subjects/{subject_id}/assignees", tags=["collab"])
@@ -154,7 +155,12 @@ class _UsernameCache:
         return self._cache[user_id]
 
 
-def _comment_to_entry(row: CommentRow, resolve: _UsernameCache) -> CommentEntry:
+def _comment_to_entry(
+    row: CommentRow,
+    resolve: _UsernameCache,
+    *,
+    mentions: list[str] | None = None,
+) -> CommentEntry:
     return CommentEntry(
         id=row.id,
         author_user_id=row.author_user_id,
@@ -162,7 +168,47 @@ def _comment_to_entry(row: CommentRow, resolve: _UsernameCache) -> CommentEntry:
         body=row.body,
         created_at=datetime.fromisoformat(row.created_at),
         updated_at=None if row.updated_at is None else datetime.fromisoformat(row.updated_at),
+        mentions=[] if mentions is None else mentions,
+        parent_comment_id=row.parent_comment_id,
     )
+
+
+def _resolve_mentions(
+    *,
+    body: str,
+    subject_id: str,
+    comment_id: int,
+    created_at: str,
+    user_repo: UserRepository,
+    access_repo: AccessRepository,
+) -> list[str]:
+    """Parse ``@username`` tokens out of ``body`` and persist the mentions.
+
+    Unknown usernames and users without read access to the dossier
+    are dropped silently — the auth layer already enforces who can
+    *post* a comment, but we do not propagate the comment to readers
+    who cannot see the dossier (so a passer-by isn't pinged for a
+    case they have no business seeing).
+
+    Returns the alphabetically-sorted list of resolved usernames so
+    the route can echo them in the wire response.
+    """
+    candidates = extract_mentions(body)
+    resolved: list[str] = []
+    for handle in candidates:
+        target = user_repo.get_by_username(handle)
+        if target is None:
+            continue
+        owner_id = access_repo.get_owner(subject_id)
+        if owner_id != target.id and not access_repo.can_read(subject_id, target.id):
+            continue
+        access_repo.add_mention(
+            comment_id,
+            target.id,
+            created_at=created_at,
+        )
+        resolved.append(target.username)
+    return sorted(resolved)
 
 
 def _assignee_to_entry(
@@ -216,7 +262,17 @@ def list_comments(
         access_repo=access_repo,
     )
     resolve = _UsernameCache(user_repo)
-    return [_comment_to_entry(r, resolve) for r in access_repo.list_comments(subject_id)]
+    out: list[CommentEntry] = []
+    for r in access_repo.list_comments(subject_id):
+        mention_ids = access_repo.list_mentions_for_comment(r.id)
+        mention_names: list[str] = []
+        for uid in mention_ids:
+            name = resolve(uid)
+            if name is not None:
+                mention_names.append(name)
+        # Sort for stable wire output regardless of insertion order.
+        out.append(_comment_to_entry(r, resolve, mentions=sorted(mention_names)))
+    return out
 
 
 @comments_router.post(
@@ -254,14 +310,45 @@ def create_comment(
             status_code=422,
             detail="comment body must contain at least one non-whitespace character",
         )
+    if payload.parent_comment_id is not None:
+        parent = access_repo.get_comment(payload.parent_comment_id)
+        if parent is None or parent.subject_id != subject_id:
+            # Either the parent does not exist, or it lives on a different
+            # subject — either way we 404 to avoid leaking whether the id
+            # is valid in some other dossier the actor cannot see.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=(
+                    f"no parent comment with id {payload.parent_comment_id} "
+                    f"on subject {subject_id!r}"
+                ),
+            )
+        if access_repo.is_reply(payload.parent_comment_id):
+            # Threads are flat: a reply cannot have replies. The UI is
+            # expected to nudge the user to reply to the *root* of the
+            # thread instead of the in-thread message.
+            raise HTTPException(
+                status_code=422,
+                detail="replies are one level deep; reply to the parent comment instead",
+            )
+    now = datetime.now(UTC).isoformat()
     row = access_repo.add_comment(
         subject_id,
         actor.id,
         body,
-        created_at=datetime.now(UTC).isoformat(),
+        created_at=now,
+        parent_comment_id=payload.parent_comment_id,
+    )
+    resolved_mentions = _resolve_mentions(
+        body=body,
+        subject_id=subject_id,
+        comment_id=row.id,
+        created_at=now,
+        user_repo=user_repo,
+        access_repo=access_repo,
     )
     resolve = _UsernameCache(user_repo)
-    return _comment_to_entry(row, resolve)
+    return _comment_to_entry(row, resolve, mentions=resolved_mentions)
 
 
 @comments_router.patch(
@@ -336,6 +423,42 @@ def update_comment(
         )
     resolve = _UsernameCache(user_repo)
     return _comment_to_entry(updated, resolve)
+
+
+@comments_router.get(
+    "/{comment_id}/replies",
+    response_model=list[CommentEntry],
+    responses={404: {"description": "subject or parent comment not found"}},
+)
+def list_replies(
+    subject_id: str,
+    comment_id: int,
+    actor: Annotated[UserRecord, Depends(current_user)],
+    subject_repo: Annotated[SubjectRepository, Depends(get_subject_repo)],
+    access_repo: Annotated[AccessRepository, Depends(get_access_repo)],
+    user_repo: Annotated[UserRepository, Depends(get_user_repo)],
+) -> list[CommentEntry]:
+    """List every reply to ``comment_id``, oldest first.
+
+    The parent comment must exist and live on ``subject_id`` —
+    cross-subject id smuggling 404s for the same reason ``DELETE``
+    does. Visibility is read-tier: any reader of the dossier can see
+    the reply thread.
+    """
+    _ensure_reader(
+        subject_id=subject_id,
+        actor=actor,
+        subject_repo=subject_repo,
+        access_repo=access_repo,
+    )
+    parent = access_repo.get_comment(comment_id)
+    if parent is None or parent.subject_id != subject_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no comment with id {comment_id} on subject {subject_id!r}",
+        )
+    resolve = _UsernameCache(user_repo)
+    return [_comment_to_entry(r, resolve) for r in access_repo.list_replies(comment_id)]
 
 
 @comments_router.delete(
