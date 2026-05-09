@@ -7,7 +7,7 @@ AI-native OSINT investigation — entity resolution, evidence-graph reasoning, e
 | # | Layer | Status |
 |---|---|---|
 | 1 | Input — `IdentifierType`: username, email, domain, url, phone, wallet, avatar; auto-detection from a raw string via `reckora.models.detect.detect_identifier_kind` | done |
-| 2 | Collection — GitHub, HN, Keybase, Gravatar, WHOIS / RDAP, web profile, phone (offline), HIBP (opt-in), wallet (BTC / ETH / SOL), avatar pHash | partial |
+| 2 | Collection — GitHub, HN, Keybase, Gravatar, Reddit, WHOIS / RDAP, DNS records (NS / MX / TXT / SPF / DMARC / DNSSEC), web profile, email, phone (offline), HIBP (opt-in), wallet (BTC / ETH / SOL), avatar pHash | done |
 | 3 | Normalization — uniform `Trace.fields`, canonicalised evidence | done |
 | 4 | Correlation — `username_mutation`, `avatar_phash`, `timezone_overlap`, `bio_similarity` (lexical + optional embeddings) | done |
 | 5 | AI Reasoning — async OpenAI client + ChatGPT OAuth, evidence-bounded prompts, anomaly detector | done |

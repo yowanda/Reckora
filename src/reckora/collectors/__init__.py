@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .avatar import AvatarCollector
 from .base import Collector
+from .dns_records import DNSCollector
 from .github_api import GitHubCollector
 from .gravatar import GravatarCollector
 from .hackernews import HackerNewsCollector
@@ -23,6 +24,7 @@ __all__ = [
     "AvatarCollector",
     "BitcoinChainCollector",
     "Collector",
+    "DNSCollector",
     "EthereumChainCollector",
     "GitHubCollector",
     "GravatarCollector",
