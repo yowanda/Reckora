@@ -13,6 +13,14 @@ JSON columns, the typed columns exist for indexable queries):
 ``edges``
     composite PK ``(subject_id, idx)``, ``edge_json``
 
+``subject_identifiers``
+    composite PK ``(subject_id, identifier_type, identifier_value)`` — a
+    flat index of the ``Identifier`` set per subject, used for cheap
+    "find every dossier that mentions identifier X" lookups (Phase 5
+    cross-references / shared evidence library). The ``identifiers_json``
+    column on ``subjects`` is still the source of truth — this table is
+    a denormalised view rebuilt on every ``save``.
+
 Each ``Trace`` and ``Edge`` is stored as one canonical-JSON column so we keep
 bit-for-bit fidelity with the in-memory Pydantic models. The Pydantic
 ``model_dump_json`` / ``model_validate_json`` round-trip is what guarantees
@@ -20,9 +28,9 @@ field schema stability across releases — bumping a model in a backward
 incompatible way will fail validation on read instead of silently corrupting
 the dossier.
 
-Foreign-key cascades clean up traces and edges on subject delete; the
-``INSERT OR REPLACE`` in ``save`` therefore keeps re-runs idempotent without
-manual child-row cleanup.
+Foreign-key cascades clean up traces, edges, and identifier-index rows on
+subject delete; the ``INSERT OR REPLACE`` in ``save`` therefore keeps
+re-runs idempotent without manual child-row cleanup.
 """
 
 from __future__ import annotations
@@ -70,6 +78,16 @@ CREATE TABLE IF NOT EXISTS dossier_anchors(
     anchor_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS subject_identifiers(
+    subject_id TEXT NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    identifier_type TEXT NOT NULL,
+    identifier_value TEXT NOT NULL,
+    PRIMARY KEY (subject_id, identifier_type, identifier_value)
+);
+
+CREATE INDEX IF NOT EXISTS idx_subject_identifiers_lookup
+    ON subject_identifiers(identifier_type, identifier_value);
+
 CREATE INDEX IF NOT EXISTS idx_subjects_created_at_desc
     ON subjects(created_at DESC);
 """
@@ -95,6 +113,7 @@ class SQLiteSubjectRepository:
         self._conn.execute("PRAGMA foreign_keys = ON;")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        self._backfill_subject_identifiers()
 
     def close(self) -> None:
         self._conn.close()
@@ -118,6 +137,42 @@ class SQLiteSubjectRepository:
         except Exception:
             self._conn.rollback()
             raise
+
+    def _backfill_subject_identifiers(self) -> None:
+        """Populate ``subject_identifiers`` from ``identifiers_json`` for legacy rows.
+
+        Older databases (pre-Phase 5) only carry the JSON column. The
+        index table is rebuilt idempotently for every subject that doesn't
+        yet have rows in it, so opening such a database for the first time
+        with a Phase-5+ build "upgrades" it transparently. Re-runs are a
+        no-op once every subject has been backfilled.
+        """
+        missing = self._conn.execute(
+            """
+            SELECT s.id, s.identifiers_json
+            FROM subjects s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM subject_identifiers si
+                WHERE si.subject_id = s.id
+            )
+            """
+        ).fetchall()
+        if not missing:
+            return
+        rows: list[tuple[str, str, str]] = []
+        for sid, identifiers_json in missing:
+            for entry in json.loads(identifiers_json):
+                rows.append((str(sid), str(entry["type"]), str(entry["value"])))
+        if rows:
+            with self._tx() as conn:
+                conn.executemany(
+                    """
+                    INSERT OR IGNORE INTO subject_identifiers
+                        (subject_id, identifier_type, identifier_value)
+                    VALUES (?, ?, ?)
+                    """,
+                    rows,
+                )
 
     def save(
         self,
@@ -172,6 +227,23 @@ class SQLiteSubjectRepository:
                     "INSERT INTO dossier_anchors (subject_id, anchor_json) VALUES (?, ?)",
                     (subject.id, anchor.model_dump_json()),
                 )
+            # Rebuild the flat identifier index. ``INSERT OR REPLACE`` on
+            # the parent ``subjects`` row does NOT cascade to children
+            # because the row id is unchanged — so we wipe and re-insert
+            # explicitly. Deduped by composite PK so a Subject that lists
+            # the same identifier twice still produces one row.
+            conn.execute(
+                "DELETE FROM subject_identifiers WHERE subject_id = ?",
+                (subject.id,),
+            )
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO subject_identifiers
+                    (subject_id, identifier_type, identifier_value)
+                VALUES (?, ?, ?)
+                """,
+                [(subject.id, i.type.value, i.value) for i in subject.identifiers],
+            )
         return SavedDossierSummary(
             id=subject.id,
             seed_identifier=subject.seed_identifier,
@@ -288,3 +360,40 @@ class SQLiteSubjectRepository:
         with self._tx() as conn:
             cur = conn.execute("DELETE FROM subjects WHERE id = ?", (subject_id,))
             return cur.rowcount > 0
+
+    def list_subjects_with_identifier(
+        self,
+        identifier: Identifier,
+        *,
+        exclude_subject_id: str | None = None,
+    ) -> list[str]:
+        """Return the ids of every subject that lists ``identifier``.
+
+        Returns subject ids ordered by ``created_at DESC, id DESC`` so the
+        caller can render the most-recent dossiers first without an extra
+        sort. Pass ``exclude_subject_id`` to drop a particular subject
+        (useful for "other dossiers that mention this identifier").
+        """
+        if exclude_subject_id is None:
+            rows = self._conn.execute(
+                """
+                SELECT s.id FROM subjects s
+                JOIN subject_identifiers si ON si.subject_id = s.id
+                WHERE si.identifier_type = ? AND si.identifier_value = ?
+                ORDER BY datetime(s.created_at) DESC, s.id DESC
+                """,
+                (identifier.type.value, identifier.value),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                SELECT s.id FROM subjects s
+                JOIN subject_identifiers si ON si.subject_id = s.id
+                WHERE si.identifier_type = ?
+                  AND si.identifier_value = ?
+                  AND s.id != ?
+                ORDER BY datetime(s.created_at) DESC, s.id DESC
+                """,
+                (identifier.type.value, identifier.value, exclude_subject_id),
+            ).fetchall()
+        return [str(r[0]) for r in rows]
