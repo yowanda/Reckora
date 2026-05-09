@@ -68,6 +68,13 @@ async def complete_via_codex(
             }
         ],
         "stream": True,
+        # The Codex backend rejects ChatGPT-account requests that
+        # leave ``store`` unset (or set to true) with a
+        # ``400 {"detail":"Store must be set to false"}``. The Codex
+        # CLI itself sends this constant, mirroring the privacy
+        # contract that Codex ChatGPT-account traffic is never
+        # written into the user's response history.
+        "store": False,
     }
 
     chunks: list[str] = []

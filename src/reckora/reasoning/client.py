@@ -56,7 +56,7 @@ class ReasoningClient:
         *,
         temperature: float = 0.2,
         oauth_credentials: OAuthCredentials | None = None,
-        oauth_model: str = "gpt-5.1-codex-mini",
+        oauth_model: str = "gpt-5.5",
         credentials_path: Path | None = None,
     ) -> None:
         # Resolve API-key candidate eagerly so callers passing

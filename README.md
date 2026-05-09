@@ -130,7 +130,7 @@ All under `/api/v1`; all require `Authorization: Bearer <token>` except `/auth/r
 | `RECKORA_API_SCREENSHOTS_URL_PREFIX` | `/screenshots` | URL prefix for served PNGs |
 | `HIBP_API_KEY` | _(unset)_ | enables `--breach` / `breach: true` |
 | `ETHERSCAN_API_KEY` | _(unset)_ | lifts the anonymous tier rate limit |
-| `RECKORA_OPENAI_OAUTH_MODEL` | `gpt-5.1-codex-mini` | model used over ChatGPT OAuth |
+| `RECKORA_OPENAI_OAUTH_MODEL` | `gpt-5.5` | model used over ChatGPT OAuth |
 
 ## Roadmap
 
