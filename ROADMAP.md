@@ -7,14 +7,14 @@ AI-native OSINT investigation — entity resolution, evidence-graph reasoning, e
 | # | Layer | Status |
 |---|---|---|
 | 1 | Input — `IdentifierType`: username, email, domain, url, phone, wallet, avatar; auto-detection from a raw string via `reckora.models.detect.detect_identifier_kind` | done |
-| 2 | Collection — GitHub, HN, Keybase, Gravatar, WHOIS / RDAP, web profile, phone (offline), HIBP (opt-in), wallet (BTC / ETH / SOL), avatar pHash | partial |
+| 2 | Collection — GitHub, HN, Keybase, Gravatar, Reddit, WHOIS / RDAP, DNS records (NS / MX / TXT / SPF / DMARC / DNSSEC), web profile, email, phone (offline), HIBP (opt-in), wallet (BTC / ETH / SOL), avatar pHash | done |
 | 3 | Normalization — uniform `Trace.fields`, canonicalised evidence | done |
 | 4 | Correlation — `username_mutation`, `avatar_phash`, `timezone_overlap`, `bio_similarity` (lexical + optional embeddings) | done |
 | 5 | AI Reasoning — async OpenAI client + ChatGPT OAuth, evidence-bounded prompts, anomaly detector | done |
 | 6 | Confidence Scoring — per-edge `confidence`, `reasons[]`, `supporting_evidence[]` | done |
 | 7 | Evidence Chain — SHA-256 + Wayback, screenshots, Merkle root, OpenTimestamps | done |
 | 8 | Graph — NetworkX in-process; optional Neo4j adapter (`[neo4j]` extra) | done |
-| 9 | Reporting — JSON / Markdown / HTML / PDF dossiers, timeline + anomalies | partial |
+| 9 | Reporting — JSON / NDJSON / Markdown / HTML / PDF dossiers, timeline + anomalies | done |
 | 10 | Web UI — FastAPI backend (`apps/api/`) + Vite + React + TS SPA (`apps/web/`) | landed |
 
 ## Phases

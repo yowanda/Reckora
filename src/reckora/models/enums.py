@@ -29,6 +29,7 @@ class TraceSource(StrEnum):
     KEYBASE_API = "keybase_api"
     GRAVATAR_API = "gravatar_api"
     WHOIS_RDAP = "whois_rdap"
+    DNS_RESOLVER = "dns_resolver"
     WEB_PROFILE = "web_profile"
     PHONE_LIBPHONENUMBER = "phone_libphonenumber"
     BREACH_HIBP = "breach_hibp"
