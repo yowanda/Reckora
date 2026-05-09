@@ -93,3 +93,22 @@ class SubjectRepository(Protocol):
 
     def delete(self, subject_id: str) -> bool:
         """Delete a dossier. Returns ``True`` if a row was actually removed."""
+
+    def list_subjects_with_identifier(
+        self,
+        identifier: Identifier,
+        *,
+        exclude_subject_id: str | None = None,
+    ) -> list[str]:
+        """Return the ids of every subject that lists ``identifier``.
+
+        This is the engine-level primitive behind Phase 5's "shared
+        evidence library" — given an identifier observed in one dossier,
+        list every other dossier that mentions the same identifier so a
+        client can surface cross-references between investigations.
+
+        Implementations MUST return ids ordered newest-first (by
+        ``created_at`` and then ``id`` as a stable tiebreaker). Pass
+        ``exclude_subject_id`` to drop a specific subject (typically the
+        dossier the cross-reference is being computed *for*).
+        """

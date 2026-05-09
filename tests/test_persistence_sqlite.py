@@ -198,3 +198,180 @@ def test_file_backed_persists_across_connections(
         loaded = repo_b.get(subject.id)
     assert loaded is not None
     assert loaded.id == subject.id
+
+
+def test_save_populates_subject_identifiers_index(
+    repo: SQLiteSubjectRepository,
+    alice_dossier: tuple[Subject, list[Trace], list[Edge]],
+) -> None:
+    """Each ``Subject.identifiers`` entry shows up in the flat index."""
+    subject, traces, edges = alice_dossier
+    repo.save(subject=subject, traces=traces, edges=edges)
+    rows = repo._conn.execute(
+        """
+        SELECT identifier_type, identifier_value
+        FROM subject_identifiers
+        WHERE subject_id = ?
+        ORDER BY identifier_type, identifier_value
+        """,
+        (subject.id,),
+    ).fetchall()
+    assert sorted((r[0], r[1]) for r in rows) == sorted(
+        (i.type.value, i.value) for i in subject.identifiers
+    )
+
+
+def test_save_rebuilds_subject_identifiers_index_on_replace(
+    repo: SQLiteSubjectRepository,
+    alice_dossier: tuple[Subject, list[Trace], list[Edge]],
+) -> None:
+    """Re-saving with a different identifier set replaces the old index rows."""
+    subject, traces, edges = alice_dossier
+    repo.save(subject=subject, traces=traces, edges=edges)
+
+    new_seed = Identifier(type=IdentifierType.EMAIL, value="alice@example.com")
+    replaced = subject.model_copy(update={"identifiers": [new_seed]})
+    repo.save(subject=replaced, traces=traces, edges=edges)
+
+    rows = repo._conn.execute(
+        """
+        SELECT identifier_type, identifier_value
+        FROM subject_identifiers
+        WHERE subject_id = ?
+        """,
+        (subject.id,),
+    ).fetchall()
+    assert rows == [(IdentifierType.EMAIL.value, "alice@example.com")]
+
+
+def test_subject_identifiers_index_dedups_repeated_entries(
+    repo: SQLiteSubjectRepository,
+    alice_dossier: tuple[Subject, list[Trace], list[Edge]],
+) -> None:
+    """A Subject that lists the same identifier twice still produces one row."""
+    subject, traces, edges = alice_dossier
+    seed = subject.seed_identifier
+    duplicated = subject.model_copy(update={"identifiers": [seed, seed]})
+    repo.save(subject=duplicated, traces=traces, edges=edges)
+
+    cur = repo._conn.execute(
+        """
+        SELECT COUNT(*) FROM subject_identifiers
+        WHERE subject_id = ?
+          AND identifier_type = ?
+          AND identifier_value = ?
+        """,
+        (subject.id, seed.type.value, seed.value),
+    )
+    assert cur.fetchone()[0] == 1
+
+
+def test_delete_cascades_to_subject_identifiers(
+    repo: SQLiteSubjectRepository,
+    alice_dossier: tuple[Subject, list[Trace], list[Edge]],
+) -> None:
+    """``ON DELETE CASCADE`` wipes the index rows when the subject is deleted."""
+    subject, traces, edges = alice_dossier
+    repo.save(subject=subject, traces=traces, edges=edges)
+    repo.delete(subject.id)
+    cur = repo._conn.execute(
+        "SELECT COUNT(*) FROM subject_identifiers WHERE subject_id = ?",
+        (subject.id,),
+    )
+    assert cur.fetchone()[0] == 0
+
+
+def test_list_subjects_with_identifier_returns_matches_newest_first(
+    repo: SQLiteSubjectRepository,
+    alice_dossier: tuple[Subject, list[Trace], list[Edge]],
+) -> None:
+    """Two subjects sharing one identifier come back ordered ``created_at DESC``."""
+    subject, traces, edges = alice_dossier
+    shared = subject.identifiers[0]
+
+    older_at = datetime(2026, 5, 1, tzinfo=UTC)
+    newer_at = older_at + timedelta(hours=1)
+    older = subject.model_copy(update={"id": "subj-older0000000"})
+    newer = subject.model_copy(update={"id": "subj-newer0000000"})
+
+    repo.save(subject=older, traces=traces, edges=edges, created_at=older_at)
+    repo.save(subject=newer, traces=traces, edges=edges, created_at=newer_at)
+
+    matches = repo.list_subjects_with_identifier(shared)
+    assert matches == [newer.id, older.id]
+
+
+def test_list_subjects_with_identifier_excludes_source_subject(
+    repo: SQLiteSubjectRepository,
+    alice_dossier: tuple[Subject, list[Trace], list[Edge]],
+) -> None:
+    subject, traces, edges = alice_dossier
+    twin = subject.model_copy(update={"id": "subj-twin0000000"})
+    repo.save(subject=subject, traces=traces, edges=edges)
+    repo.save(subject=twin, traces=traces, edges=edges)
+
+    shared = subject.identifiers[0]
+    matches = repo.list_subjects_with_identifier(shared, exclude_subject_id=subject.id)
+    assert matches == [twin.id]
+
+
+def test_list_subjects_with_identifier_returns_empty_for_unique_identifier(
+    repo: SQLiteSubjectRepository,
+    alice_dossier: tuple[Subject, list[Trace], list[Edge]],
+) -> None:
+    subject, traces, edges = alice_dossier
+    repo.save(subject=subject, traces=traces, edges=edges)
+    novel = Identifier(type=IdentifierType.EMAIL, value="never-seen@example.com")
+    assert repo.list_subjects_with_identifier(novel) == []
+
+
+def test_open_legacy_db_backfills_subject_identifiers_index(
+    tmp_path: Path,
+    alice_dossier: tuple[Subject, list[Trace], list[Edge]],
+) -> None:
+    """A pre-Phase-5 database (no index rows) is backfilled when reopened."""
+    import sqlite3
+
+    db_path = tmp_path / "legacy.db"
+    subject, traces, edges = alice_dossier
+    with SQLiteSubjectRepository(db_path) as repo_a:
+        repo_a.save(subject=subject, traces=traces, edges=edges)
+
+    # Simulate a legacy DB by wiping the index rows on disk *without* dropping
+    # the table — the new repo must re-populate them at construction time.
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM subject_identifiers")
+        conn.commit()
+
+    with SQLiteSubjectRepository(db_path) as repo_b:
+        rows = repo_b._conn.execute(
+            """
+            SELECT identifier_type, identifier_value
+            FROM subject_identifiers
+            WHERE subject_id = ?
+            ORDER BY identifier_type, identifier_value
+            """,
+            (subject.id,),
+        ).fetchall()
+    assert sorted((r[0], r[1]) for r in rows) == sorted(
+        (i.type.value, i.value) for i in subject.identifiers
+    )
+
+
+def test_backfill_is_idempotent_on_repeated_open(
+    tmp_path: Path,
+    alice_dossier: tuple[Subject, list[Trace], list[Edge]],
+) -> None:
+    db_path = tmp_path / "reopen.db"
+    subject, traces, edges = alice_dossier
+    with SQLiteSubjectRepository(db_path) as repo_a:
+        repo_a.save(subject=subject, traces=traces, edges=edges)
+    # Re-opening the same file twice must not duplicate rows in the index.
+    with SQLiteSubjectRepository(db_path) as _repo_b:
+        pass
+    with SQLiteSubjectRepository(db_path) as repo_c:
+        cur = repo_c._conn.execute(
+            "SELECT COUNT(*) FROM subject_identifiers WHERE subject_id = ?",
+            (subject.id,),
+        )
+        assert cur.fetchone()[0] == len(subject.identifiers)
