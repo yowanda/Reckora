@@ -13,11 +13,18 @@ _COMMENT_BODY_MAX = 10_000
 
 
 class CommentCreate(BaseModel):
-    """Body for ``POST /api/v1/subjects/{subject_id}/comments``."""
+    """Body for ``POST /api/v1/subjects/{subject_id}/comments``.
+
+    ``parent_comment_id``, when present, threads this comment as a
+    reply to an earlier comment on the same subject. The route layer
+    enforces one-level nesting (a reply cannot itself have replies),
+    so threads are always flat at the wire level.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     body: str = Field(..., min_length=1, max_length=_COMMENT_BODY_MAX)
+    parent_comment_id: int | None = None
 
 
 class CommentUpdate(BaseModel):
@@ -41,6 +48,16 @@ class CommentEntry(BaseModel):
     deleted from the user table — the row is preserved (not cascade-
     deleted) so the thread keeps its narrative continuity, but the
     frontend can render the row as "deleted user".
+
+    ``mentions`` carries the list of resolved usernames from any
+    ``@username`` tokens in the body — deduped, sorted alphabetically
+    for stable rendering, and limited to users who could read the
+    dossier when the comment fired. Unresolved tokens (typos, foreign
+    handles) are dropped silently rather than surfaced.
+
+    ``parent_comment_id`` is ``None`` for top-level comments and the
+    id of the parent comment for replies, mirroring the schema in the
+    underlying ``subject_comment_replies`` side table.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -51,6 +68,8 @@ class CommentEntry(BaseModel):
     body: str
     created_at: datetime
     updated_at: datetime | None = None
+    mentions: list[str] = []
+    parent_comment_id: int | None = None
 
 
 class AssigneeCreate(BaseModel):
