@@ -17,28 +17,34 @@ Optional extras (each is opt-in):
 ## CLI
 
 ```bash
-# Run an investigation; print the dossier (markdown by default).
-reckora investigate octocat --kind username
-reckora investigate example.com --kind domain --ai
+# --kind is auto-detected from the value when omitted.
+reckora investigate octocat                                    # → username
+reckora investigate alice@example.com                          # → email
+reckora investigate https://github.com/octocat                 # → url
+reckora investigate 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEAd # → wallet (ETH)
+reckora investigate +628123456789                              # → phone
+reckora investigate example.com --ai                           # → domain
+
+# Pass --kind explicitly to override auto-detection.
+reckora investigate user.name --kind username   # otherwise treated as a domain
 
 # Pick the format / write to file (extension is enough — md / json / html / pdf).
-reckora investigate octocat --kind username --output dossier.html
-reckora investigate octocat --kind username --format pdf --output dossier.pdf
+reckora investigate octocat --output dossier.html
+reckora investigate octocat --format pdf --output dossier.pdf
 
 # Persist to the SQLite store and reopen.
-reckora investigate octocat --kind username --save
+reckora investigate octocat --save
 reckora list
 reckora show subj-...
 
 # Mint a Wayback snapshot per evidence URL.
-reckora investigate octocat --kind username --archive
+reckora investigate octocat --archive
 
 # Capture forensic full-page PNGs (needs the screenshots extra).
-reckora investigate octocat --kind username --screenshot \
-    --screenshots-dir ./screenshots
+reckora investigate octocat --screenshot --screenshots-dir ./screenshots
 
 # Anchor evidence into a Merkle root + OpenTimestamps stamp.
-reckora investigate octocat --kind username --anchor --save
+reckora investigate octocat --anchor --save
 reckora verify-anchor subj-...
 
 # AI reasoning: either set OPENAI_API_KEY, or log in with ChatGPT.
@@ -48,10 +54,10 @@ reckora auth refresh
 reckora auth logout
 
 # Opt-in HIBP breach lookup (requires HIBP_API_KEY).
-reckora investigate alice@example.com --kind email --breach
+reckora investigate alice@example.com --breach
 ```
 
-Supported `--kind` values: `username`, `email`, `domain`, `url`, `phone`, `wallet` (BTC / ETH / SOL), `avatar` (image URL).
+Supported `--kind` values: `username`, `email`, `domain`, `url`, `phone`, `wallet` (BTC / ETH / SOL), `avatar` (image URL). Auto-detection covers all of them; pass `--kind` only when the heuristic guesses wrong (e.g. a dotted handle that looks like a domain).
 
 Active collectors (default orchestrator): GitHub, Hacker News, Keybase, Gravatar, WHOIS / RDAP, web profile, phone (offline `phonenumbers`), wallet (Blockstream Esplora / Etherscan / Solana mainnet-beta JSON-RPC), avatar perceptual hash, opt-in HIBP breach.
 

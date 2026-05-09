@@ -37,6 +37,7 @@ from .config import settings
 from .evidence.anchor import Anchor, anchor_traces
 from .evidence.archive import Archiver, WaybackArchiver
 from .evidence.screenshot import Screenshotter
+from .models.detect import detect_identifier_kind
 from .models.entity import Edge, Identifier, Subject, Trace
 from .models.enums import IdentifierType
 from .orchestrator import Orchestrator
@@ -64,7 +65,24 @@ auth_app = typer.Typer(
 app.add_typer(auth_app, name="auth")
 
 
-def _identifier_from(value: str, kind: str) -> Identifier:
+def _identifier_from(value: str, kind: str | None) -> Identifier:
+    """Build an Identifier from a CLI ``value`` + optional ``--kind``.
+
+    When ``kind`` is omitted (or the literal ``"auto"``), we run the
+    auto-detector. A genuinely undetectable value raises
+    :class:`typer.BadParameter` so the user knows to pass ``--kind``
+    explicitly instead of getting a confusing collector-level error.
+    """
+    stripped = value.strip()
+    if kind is None or kind == "auto":
+        detected = detect_identifier_kind(stripped)
+        if detected is None:
+            valid = ", ".join(e.value for e in IdentifierType)
+            raise typer.BadParameter(
+                f"could not auto-detect identifier kind for {value!r}; "
+                f"pass --kind explicitly. Valid kinds: {valid}"
+            )
+        return Identifier(type=detected, value=stripped)
     try:
         identifier_type = IdentifierType(kind)
     except ValueError as exc:
@@ -72,7 +90,7 @@ def _identifier_from(value: str, kind: str) -> Identifier:
         raise typer.BadParameter(
             f"unknown identifier kind {kind!r}; expected one of: {valid}"
         ) from exc
-    return Identifier(type=identifier_type, value=value)
+    return Identifier(type=identifier_type, value=stripped)
 
 
 def _build_orchestrator(*, breach_enabled: bool = False) -> Orchestrator:
@@ -265,9 +283,16 @@ def investigate(
         str, typer.Argument(help="Identifier value (e.g. a username, domain, profile URL).")
     ],
     kind: Annotated[
-        str,
-        typer.Option("--kind", "-k", help="Identifier kind: username|email|domain|url|...."),
-    ] = "username",
+        str | None,
+        typer.Option(
+            "--kind",
+            "-k",
+            help=(
+                "Identifier kind: username|email|domain|url|phone|wallet|avatar. "
+                "Auto-detected from VALUE when omitted."
+            ),
+        ),
+    ] = None,
     output: Annotated[
         Path | None,
         typer.Option(
