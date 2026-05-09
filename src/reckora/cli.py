@@ -29,11 +29,14 @@ from .collectors.hackernews import HackerNewsCollector
 from .collectors.keybase import KeybaseCollector
 from .collectors.phone import PhoneCollector
 from .collectors.reddit import RedditCollector
+from .collectors.social_presence import SocialPresenceProbeCollector
+from .collectors.tiktok import TikTokCollector
 from .collectors.wallet_btc import BitcoinChainCollector
 from .collectors.wallet_eth import EthereumChainCollector
 from .collectors.wallet_sol import SolanaChainCollector
 from .collectors.web_profile import WebProfileCollector
 from .collectors.whois_rdap import WhoisRdapCollector
+from .collectors.x_twitter import XCollector
 from .config import settings
 from .evidence.anchor import Anchor, anchor_traces
 from .evidence.archive import Archiver, WaybackArchiver
@@ -102,6 +105,9 @@ def _build_orchestrator(*, breach_enabled: bool = False) -> Orchestrator:
         KeybaseCollector(),
         GravatarCollector(),
         RedditCollector(),
+        XCollector(),
+        TikTokCollector(),
+        SocialPresenceProbeCollector(),
         WhoisRdapCollector(),
         DNSCollector(),
         WebProfileCollector(),

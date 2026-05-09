@@ -14,11 +14,14 @@ from .gravatar import GravatarCollector
 from .hackernews import HackerNewsCollector
 from .keybase import KeybaseCollector
 from .phone import PhoneCollector
+from .social_presence import SocialPresenceProbeCollector
+from .tiktok import TikTokCollector
 from .wallet_btc import BitcoinChainCollector
 from .wallet_eth import EthereumChainCollector
 from .wallet_sol import SolanaChainCollector
 from .web_profile import WebProfileCollector
 from .whois_rdap import WhoisRdapCollector
+from .x_twitter import XCollector
 
 __all__ = [
     "AvatarCollector",
@@ -31,7 +34,10 @@ __all__ = [
     "HackerNewsCollector",
     "KeybaseCollector",
     "PhoneCollector",
+    "SocialPresenceProbeCollector",
     "SolanaChainCollector",
+    "TikTokCollector",
     "WebProfileCollector",
     "WhoisRdapCollector",
+    "XCollector",
 ]

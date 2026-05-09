@@ -22,11 +22,14 @@ from reckora.collectors.hackernews import HackerNewsCollector
 from reckora.collectors.keybase import KeybaseCollector
 from reckora.collectors.phone import PhoneCollector
 from reckora.collectors.reddit import RedditCollector
+from reckora.collectors.social_presence import SocialPresenceProbeCollector
+from reckora.collectors.tiktok import TikTokCollector
 from reckora.collectors.wallet_btc import BitcoinChainCollector
 from reckora.collectors.wallet_eth import EthereumChainCollector
 from reckora.collectors.wallet_sol import SolanaChainCollector
 from reckora.collectors.web_profile import WebProfileCollector
 from reckora.collectors.whois_rdap import WhoisRdapCollector
+from reckora.collectors.x_twitter import XCollector
 from reckora.config import settings as engine_settings
 from reckora.orchestrator import Orchestrator
 from reckora.persistence.sqlite import SQLiteSubjectRepository
@@ -65,6 +68,9 @@ def _default_orchestrator_factory() -> Orchestrator:
             KeybaseCollector(),
             GravatarCollector(),
             RedditCollector(),
+            XCollector(),
+            TikTokCollector(),
+            SocialPresenceProbeCollector(),
             WhoisRdapCollector(),
             WebProfileCollector(),
             PhoneCollector(),

@@ -39,6 +39,9 @@ class TraceSource(StrEnum):
     AVATAR_HTTP = "avatar_http"
     EMAIL_PROFILE = "email_profile"
     REDDIT_PROFILE = "reddit_profile"
+    X_SYNDICATION = "x_syndication"
+    TIKTOK_WEB = "tiktok_web"
+    SOCIAL_PRESENCE_PROBE = "social_presence_probe"
     USER_PROVIDED = "user_provided"
 
 
