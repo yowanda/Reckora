@@ -11,6 +11,7 @@ from typing import Annotated
 import typer
 
 from . import __version__
+from .agent import AgentLoop, Researcher, ToolBudget
 from .auth.login import OAuthLoginError, interactive_login
 from .auth.oauth import OAuthCredentials, refresh_credentials
 from .auth.storage import (
@@ -240,6 +241,9 @@ async def _run(
     screenshotter: Screenshotter | None = None,
     breach_enabled: bool = False,
     anchor_enabled: bool = False,
+    ai_iterations: int = 0,
+    ai_tools: bool = False,
+    ai_tool_calls: int = 8,
 ) -> tuple[Subject, list[Trace], list[Edge], str | None, str | None, Anchor | None]:
     orchestrator = _build_orchestrator(breach_enabled=breach_enabled)
     subject, traces, edges = await orchestrator.investigate(
@@ -278,6 +282,36 @@ async def _run(
             oauth_model=settings.openai_oauth_model,
         )
         try:
+            if ai_iterations >= 1:
+                # Recursive AgentLoop: drives the propose/verify/collect
+                # cycle ``ai_iterations`` times, optionally letting the
+                # LLM call ``web_search``/``fetch_url`` between rounds
+                # to gather evidence the rule-based collectors missed.
+                researcher: Researcher | None = None
+                if ai_tools:
+                    if not settings.openai_api_key:
+                        raise typer.BadParameter(
+                            "--ai-tools requires OPENAI_API_KEY (ChatGPT "
+                            "OAuth tool calls are not currently supported)."
+                        )
+                    researcher = Researcher.with_default_tools(
+                        client=client,
+                        seed=seed,
+                        budget=ToolBudget(calls_remaining=ai_tool_calls),
+                    )
+                loop = AgentLoop(
+                    orchestrator,
+                    client,
+                    max_iterations=ai_iterations,
+                    researcher=researcher,
+                )
+                result = await loop.run(seed)
+                # Replace the orchestrator-only state with the loop's
+                # expanded state. The loop re-runs correlation each
+                # iteration so its trace/edge sets are authoritative.
+                subject = result.subject
+                traces = list(result.traces)
+                edges = list(result.edges)
             ident_strs = [str(i) for i in subject.identifiers]
             summary_md = await summarize(
                 client,
@@ -399,8 +433,43 @@ def investigate(
             ),
         ),
     ] = False,
+    ai_iterations: Annotated[
+        int,
+        typer.Option(
+            "--ai-iterations",
+            help=(
+                "Number of recursive AgentLoop rounds (0 = passive summary only). "
+                "Each round lets the LLM propose follow-up identifiers, runs them "
+                "through the verifier and confidence-floor gate, then re-correlates."
+            ),
+            min=0,
+        ),
+    ] = 0,
+    ai_tools: Annotated[
+        bool,
+        typer.Option(
+            "--ai-tools",
+            help=(
+                "Allow the AgentLoop's LLM to call web_search and fetch_url so it "
+                "can gather evidence beyond what the rule-based collectors found. "
+                "Requires --ai-iterations >= 1 and OPENAI_API_KEY."
+            ),
+        ),
+    ] = False,
+    ai_tool_calls: Annotated[
+        int,
+        typer.Option(
+            "--ai-tool-calls",
+            help="Per-iteration tool-call budget when --ai-tools is enabled.",
+            min=1,
+        ),
+    ] = 8,
 ) -> None:
     """Run a Reckora investigation against a seed Identifier."""
+    if ai_iterations >= 1 and not ai:
+        raise typer.BadParameter("--ai-iterations >= 1 requires --ai")
+    if ai_tools and ai_iterations < 1:
+        raise typer.BadParameter("--ai-tools requires --ai-iterations >= 1")
     seed = _identifier_from(value, kind)
     extras: list[Identifier] = []
     for raw in extra or []:
@@ -414,9 +483,9 @@ def investigate(
         _build_screenshotter(screenshots_dir) if screenshot else None
     )
 
-    async def _go() -> tuple[
-        Subject, list[Trace], list[Edge], str | None, str | None, Anchor | None
-    ]:
+    async def _go() -> (
+        tuple[Subject, list[Trace], list[Edge], str | None, str | None, Anchor | None]
+    ):
         try:
             return await _run(
                 seed,
@@ -426,6 +495,9 @@ def investigate(
                 screenshotter=screenshotter,
                 breach_enabled=breach,
                 anchor_enabled=anchor,
+                ai_iterations=ai_iterations,
+                ai_tools=ai_tools,
+                ai_tool_calls=ai_tool_calls,
             )
         finally:
             for resource in (archiver, screenshotter):

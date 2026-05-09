@@ -50,6 +50,7 @@ const SOURCE_META: Record<string, SourceMeta> = {
     tags: ["social", "probe"],
   },
   user_provided: { label: "User-provided", tags: ["manual"] },
+  web_research: { label: "Web research", tags: ["ai", "research"] },
 };
 
 const TITLE_CASE_OVERRIDES: Record<string, string> = {

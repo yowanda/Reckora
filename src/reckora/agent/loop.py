@@ -39,9 +39,11 @@ from ..correlation.embeddings import BioEmbedder
 from ..correlation.engine import correlate
 from ..models.entity import Edge, Identifier, Subject, Trace
 from ..orchestrator import Orchestrator
-from ..reasoning.client import ReasoningClient
+from ..reasoning.client import ReasoningClient, ToolsNotSupportedError
 from ..reasoning.summarize import format_edge, format_trace
 from .prompts import AGENT_SYSTEM, PROPOSE_USER_TEMPLATE
+from .research import Researcher
+from .tools import ToolInvocation, ToolRunSummary
 from .verifier import (
     ProposedIdentifier,
     VerificationResult,
@@ -71,6 +73,8 @@ class AgentTranscriptStep:
     confidence_dropped: tuple[Identifier, ...]
     retained: tuple[Identifier, ...]
     new_traces: tuple[Trace, ...]
+    research_invocations: tuple[ToolInvocation, ...] = ()
+    research_traces: tuple[Trace, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -106,6 +110,7 @@ class AgentLoop:
         confidence_floor: float = 0.5,
         max_proposals_per_iteration: int = 5,
         bio_embedder: BioEmbedder | None = None,
+        researcher: Researcher | None = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be >= 1")
@@ -119,6 +124,8 @@ class AgentLoop:
         self._confidence_floor = confidence_floor
         self._max_proposals = max_proposals_per_iteration
         self._bio_embedder = bio_embedder
+        self._researcher = researcher
+        self._researcher_disabled = False
         self._verifier = Verifier(_collectors_of(orchestrator))
 
     async def run(self, seed: Identifier) -> AgentLoopResult:
@@ -146,6 +153,13 @@ class AgentLoop:
             if step is None:
                 break
             transcript.append(step)
+            if step.research_traces:
+                # Research traces are kept in the working set even
+                # when the planner produces nothing useful — the LLM
+                # spent budget on them, the dossier should surface
+                # them.
+                traces = list(traces) + list(step.research_traces)
+                edges = correlate(traces, bio_embedder=self._bio_embedder)
             if not step.retained:
                 # Either the verifier killed every proposal or every
                 # accepted candidate failed the confidence-floor gate.
@@ -183,6 +197,16 @@ class AgentLoop:
         entry. Otherwise returns the iteration's transcript step;
         ``step.retained`` empty means the loop should stop.
         """
+        research = await self._maybe_research(
+            seed=seed,
+            iteration=iteration,
+            visited=visited,
+            traces=traces,
+            edges=edges,
+        )
+        if research.new_traces:
+            traces = list(traces) + list(research.new_traces)
+            edges = correlate(traces, bio_embedder=self._bio_embedder)
         user = self._build_user_prompt(
             seed=seed,
             iteration=iteration,
@@ -198,6 +222,14 @@ class AgentLoop:
 
         proposals = parse_plan(raw_plan)
         if not proposals:
+            if research.new_traces or research.invocations:
+                return _empty_step(
+                    iteration=iteration,
+                    raw_plan=raw_plan,
+                    proposals=[],
+                    verification=VerificationResult(),
+                    research=research,
+                )
             return None
 
         # Cap proposals before verification so a runaway LLM can't
@@ -216,6 +248,7 @@ class AgentLoop:
                 raw_plan=raw_plan,
                 proposals=proposals,
                 verification=verification,
+                research=research,
             )
 
         new_traces = await self._collect(verification.accepted)
@@ -244,7 +277,50 @@ class AgentLoop:
             confidence_dropped=dropped,
             retained=retained,
             new_traces=kept_traces,
+            research_invocations=research.invocations,
+            research_traces=research.new_traces,
         )
+
+    async def _maybe_research(
+        self,
+        *,
+        seed: Identifier,
+        iteration: int,
+        visited: set[Identifier],
+        traces: list[Trace],
+        edges: list[Edge],
+    ) -> ToolRunSummary:
+        """Run the tool-using research phase if a Researcher is configured.
+
+        Returns an empty :class:`ToolRunSummary` when no researcher is
+        attached, when the researcher has been disabled mid-run after
+        an unsupported-auth error, or when the researcher itself
+        raises (we don't want a flaky tool to take the whole loop
+        down). On the first :class:`ToolsNotSupportedError` we permanently
+        disable the researcher for the rest of the run so subsequent
+        iterations don't pay another round-trip.
+        """
+        if self._researcher is None or self._researcher_disabled:
+            return ToolRunSummary()
+        try:
+            return await self._researcher.run(
+                seed=seed,
+                iteration=iteration,
+                max_iterations=self._max_iterations,
+                traces=traces,
+                edges=edges,
+                visited=visited,
+            )
+        except ToolsNotSupportedError:
+            log.info(
+                "agent researcher disabled for this run: tool calls "
+                "require an OPENAI_API_KEY auth path"
+            )
+            self._researcher_disabled = True
+            return ToolRunSummary()
+        except Exception:
+            log.exception("agent research step failed")
+            return ToolRunSummary()
 
     def _build_user_prompt(
         self,
@@ -352,6 +428,7 @@ def _empty_step(
     raw_plan: str,
     proposals: list[ProposedIdentifier],
     verification: VerificationResult,
+    research: ToolRunSummary | None = None,
 ) -> AgentTranscriptStep:
     """Render an iteration that produced zero accepted identifiers.
 
@@ -359,6 +436,7 @@ def _empty_step(
     transcript field when the agent terminates without expanding the
     graph, since it tells reviewers *why* the LLM failed verification.
     """
+    research = research or ToolRunSummary()
     return AgentTranscriptStep(
         iteration=iteration,
         raw_plan=raw_plan,
@@ -368,6 +446,8 @@ def _empty_step(
         confidence_dropped=(),
         retained=(),
         new_traces=(),
+        research_invocations=research.invocations,
+        research_traces=research.new_traces,
     )
 
 
