@@ -149,6 +149,20 @@ class _FakeTransaction:
             )
             return _FakeResult([rec])
 
+        # LIST subjects sharing an identifier (cross-reference lookup)
+        if "(i:Identifier {kind: $kind, value: $value})<-[:HAS_IDENTIFIER]-(sub:Subject)" in q:
+            kind = params["kind"]
+            value = params["value"]
+            exclude = params.get("exclude")
+            matched: list[tuple[str, str]] = []
+            for sid, items in self._store.subject_identifiers.items():
+                if exclude is not None and sid == exclude:
+                    continue
+                if any(it["kind"] == kind and it["value"] == value for it in items):
+                    matched.append((sid, self._store.subjects[sid]["created_at"]))
+            matched.sort(key=lambda r: (r[1], r[0]), reverse=True)
+            return _FakeResult([_FakeRecord(id=sid, created_at=ts) for sid, ts in matched])
+
         # LIST recent (paged)
         if "ORDER BY sub.created_at DESC, sub.id DESC LIMIT $limit" in q:
             limit = int(params["limit"])
@@ -415,6 +429,54 @@ def test_save_identifier_payload_marks_seed_relation() -> None:
     assert seed_items, "seed identifier missing from HAS_IDENTIFIER payload"
     assert seed_items[0]["seed"] is True
     assert any(not i["seed"] for i in items)
+
+
+def test_list_subjects_with_identifier_returns_matches_newest_first() -> None:
+    driver = _FakeDriver()
+    repo = Neo4jSubjectRepository(driver)
+    subject, traces, edges = _sample_subject()
+    shared = subject.identifiers[1]  # "alice@example.com"
+
+    older = subject.model_copy(update={"id": "subj-older"})
+    newer = subject.model_copy(update={"id": "subj-newer"})
+    repo.save(
+        subject=older,
+        traces=traces,
+        edges=edges,
+        created_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    repo.save(
+        subject=newer,
+        traces=traces,
+        edges=edges,
+        created_at=datetime(2026, 5, 3, tzinfo=UTC),
+    )
+
+    matches = repo.list_subjects_with_identifier(shared)
+    assert matches == ["subj-newer", "subj-older"]
+
+
+def test_list_subjects_with_identifier_excludes_source_subject() -> None:
+    driver = _FakeDriver()
+    repo = Neo4jSubjectRepository(driver)
+    subject, traces, edges = _sample_subject()
+
+    twin = subject.model_copy(update={"id": "subj-twin"})
+    repo.save(subject=subject, traces=traces, edges=edges)
+    repo.save(subject=twin, traces=traces, edges=edges)
+
+    shared = subject.identifiers[0]
+    assert repo.list_subjects_with_identifier(shared, exclude_subject_id=subject.id) == [twin.id]
+
+
+def test_list_subjects_with_identifier_returns_empty_for_unique_identifier() -> None:
+    driver = _FakeDriver()
+    repo = Neo4jSubjectRepository(driver)
+    subject, traces, edges = _sample_subject()
+    repo.save(subject=subject, traces=traces, edges=edges)
+
+    novel = Identifier(type=IdentifierType.EMAIL, value="never-seen@example.com")
+    assert repo.list_subjects_with_identifier(novel) == []
 
 
 def test_lazy_import_via_module_getattr() -> None:
