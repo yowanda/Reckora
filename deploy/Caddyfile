@@ -1,0 +1,42 @@
+# Reckora — Caddy reverse proxy + SPA host
+#
+# Caddy auto-issues TLS from Let's Encrypt the first time the configured
+# ``DOMAIN`` resolves to this host. Set ``DOMAIN`` in the ``.env`` file
+# next to ``docker-compose.yml`` (see ``deploy/.env.example``).
+#
+# All API-shaped paths reverse-proxy to the ``api`` service over the
+# compose network; everything else is served as static SPA with HTML5
+# routing fallback (``try_files {path} /index.html``).
+
+{$DOMAIN} {
+    encode gzip zstd
+
+    log {
+        output stdout
+        format console
+    }
+
+    @api path /api/* /healthz /openapi.json /docs* /redoc* /screenshots/*
+    handle @api {
+        reverse_proxy api:8000 {
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host  {host}
+            header_up X-Real-IP         {remote_host}
+        }
+    }
+
+    handle {
+        root * /usr/share/caddy
+        try_files {path} /index.html
+        file_server
+    }
+
+    header {
+        # Modest hardening; tighten further once a CSP audit is done.
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy        "strict-origin-when-cross-origin"
+        X-Frame-Options        "DENY"
+        Permissions-Policy     "geolocation=(), microphone=(), camera=()"
+        -Server
+    }
+}
