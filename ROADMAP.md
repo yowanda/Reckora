@@ -15,12 +15,12 @@ AI-native OSINT investigation — entity resolution, evidence-graph reasoning, e
 | 7 | Evidence Chain — SHA-256 + Wayback, screenshots, Merkle root, OpenTimestamps | done |
 | 8 | Graph — NetworkX in-process; optional Neo4j adapter (`[neo4j]` extra) | done |
 | 9 | Reporting — JSON / Markdown / HTML / PDF dossiers, timeline + anomalies | partial |
-| 10 | Web UI — FastAPI backend (`apps/api/`); SPA (`apps/web/`) pending | partial |
+| 10 | Web UI — FastAPI backend (`apps/api/`) + Vite + React + TS SPA (`apps/web/`) | landed |
 
 ## Phases
 
 - **Phase 1 — MVP skeleton.** Landed.
-- **Phase 2 — Persistence & UI backend.** Backend landed; SPA at `apps/web/` pending.
+- **Phase 2 — Persistence & UI.** Backend + SPA landed.
 - **Phase 3 — descoped** (Cosmos / TRON wallet adapters dropped).
 - **Phase 4 — Autonomous agents.** `AgentLoop` + ChatGPT OAuth login. Landed.
 - **Phase 5 — Collaborative platform.** See checklist below.
@@ -46,7 +46,7 @@ Multi-user investigations on top of the FastAPI backend. All modules live under 
 | 13 | Visit stamps + unread counts | `visits/` | landed |
 | 14 | Per-actor TODO checklist | `todos/` | landed |
 
-Endpoint surface for each module is summarised in the API table in [README.md](./README.md).
+Endpoint surface for each module is summarised in the API table in [README.md](./README.md). The SPA at `apps/web/` consumes them via a typed `openapi-fetch` client generated from `/openapi.json`.
 
 ## Layout
 
@@ -55,10 +55,10 @@ Reckora/
 ├── src/reckora/        # engine — collectors, correlation, persistence, reports, CLI
 └── apps/
     ├── api/reckora_api/   # FastAPI backend (Phase 2, landed)
-    └── web/               # Vite + React + TS frontend (pending)
+    └── web/               # Vite + React + TS frontend (Layer 10, landed)
 ```
 
-The backend is a thin FastAPI shell on top of the engine (`Orchestrator` + `SubjectRepository` + `reckora.reports`). Frontend stack is locked in (Vite + React + TS) and will consume `/openapi.json` for typed client generation.
+The backend is a thin FastAPI shell on top of the engine (`Orchestrator` + `SubjectRepository` + `reckora.reports`). The SPA is a Vite + React + TS app driven by a typed client generated from `/openapi.json` (`openapi-fetch` + `openapi-typescript`); CI typechecks and builds it on every change to `apps/web/**`.
 
 ## Strategic posture
 
