@@ -44,10 +44,10 @@ default, `8px` panels, `12px` modals.
 | **M1** | Cache busting (Caddy headers; Vite hash already on)                 | ✅ done | `deploy/Caddyfile` — `/assets/*` immutable 1y, `/index.html` no-cache. |
 | **M2** | Admin create-member endpoint + SPA Members panel                    | ✅ done | `POST /api/v1/users` (admin only) + `/admin/members` page (admin-only nav link, list/create/promote/demote). |
 | **M3** | Forensic design tokens (Tailwind theme)                             | ✅ done | `tailwind.config.ts` + `index.css` — ink surfaces, cyan + amber accents, Inter/JetBrains Mono via Google Fonts, faint data grid backdrop, on-brand scrollbars. |
-| **M4** | Layout chrome: sidebar nav + breadcrumbs + global ⌘K command        | pending | Replace topbar; persistent nav. |
-| **M5** | Page-by-page restyle                                                | pending | Login, Subjects, Detail, NewInv, Mentions, Pins, Watching, Phase 5. |
-| **M6** | Polish: empty states, skeletons, errors, motion                     | pending | |
-| **M7** | Rebuild + redeploy to VPS                                           | pending | `docker compose build && up -d`. |
+| **M4** | Layout chrome: sidebar nav + breadcrumbs + global ⌘K command        | ✅ done | New `Sidebar` (logo, sectioned nav, footer with role badge + sign-out), sticky topbar with `Breadcrumbs` + Search button, `CommandPalette` modal (⌘K / Ctrl+K). Mobile drawer for the sidebar. |
+| **M5** | Page-by-page restyle                                                | ✅ done | Login (branded sign-in panel + ambient glow), Subjects (filter + kind chips), SubjectDetail (panel headers, monospaced ids, danger-toned delete), NewInvestigation (toggle cards w/ descriptions), Mentions / Pinned / Watching (shared `SavedDossierList`), Members (admin panel polish, role chip + live dot), and Phase 5 cards normalised onto the new ink/fg/accent/alert tokens. |
+| **M6** | Polish: empty states, skeletons, errors, motion                     | ✅ done | New shimmer skeleton (accent sweep), empty states with hairline accent + dashed border, on-brand error toasts (ok/danger/info palette), forensic 404 page, page-transition fade-in. All animations gated by `prefers-reduced-motion`. |
+| **M7** | Rebuild + redeploy to VPS                                           | ✅ done | Web image rebuilt on VPS (`docker compose build web && up -d web`); new bundle live behind `https://reckora.my.id`. Cache headers verified — `index.html` `no-cache`, `/assets/*` `immutable`. API container untouched. Public DNS resolvers still report stale `103.7.9.22` for ~3 hours from some networks; Cloudflare DNS already returns `140.245.45.103`. |
 
 Status legend: ✅ done · ⏳ in progress · pending · ❌ blocked.
 

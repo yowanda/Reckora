@@ -72,8 +72,8 @@ export function PrivateNote({ subjectId }: { subjectId: string }) {
   }, [note.data?.body]);
 
   return (
-    <section className="rounded border border-border bg-bg-panel">
-      <header className="border-b border-border px-3 py-2 text-xs uppercase tracking-wide text-zinc-500">
+    <section className="rounded border border-ink-line bg-ink-panel">
+      <header className="border-b border-ink-line px-3 py-2 text-xs uppercase tracking-wide text-fg-dim">
         Private note
       </header>
       <div className="space-y-2 p-3">
@@ -82,7 +82,7 @@ export function PrivateNote({ subjectId }: { subjectId: string }) {
           onChange={(e) => setDraft(e.target.value)}
           rows={4}
           placeholder="Only visible to you."
-          className="w-full rounded border border-border bg-bg-subtle px-2 py-1 text-sm outline-none focus:border-accent"
+          className="w-full rounded border border-ink-line bg-ink-subtle px-2 py-1 text-sm outline-none focus:border-accent"
         />
         {save.error ? <ErrorMessage error={save.error} /> : null}
         <div className="flex gap-2">
@@ -98,7 +98,7 @@ export function PrivateNote({ subjectId }: { subjectId: string }) {
             <button
               type="button"
               onClick={() => clear.mutate(subjectId)}
-              className="rounded border border-border bg-bg-subtle px-2 py-1 text-xs"
+              className="rounded border border-ink-line bg-ink-subtle px-2 py-1 text-xs"
             >
               Clear
             </button>

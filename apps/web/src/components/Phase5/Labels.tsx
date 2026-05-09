@@ -65,20 +65,20 @@ export function LabelChips({ subjectId }: { subjectId: string }) {
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-xs uppercase tracking-wide text-zinc-500">
+      <span className="text-xs uppercase tracking-wide text-fg-dim">
         Labels
       </span>
       {(list.data ?? []).map((label) => (
         <span
           key={label.label}
-          className="inline-flex items-center gap-1 rounded-full border border-border bg-bg-subtle px-2 py-0.5 text-xs"
+          className="inline-flex items-center gap-1 rounded-full border border-ink-line bg-ink-subtle px-2 py-0.5 text-xs"
         >
           {label.label}
           <button
             type="button"
             aria-label={`Remove label ${label.label}`}
             onClick={() => remove.mutate({ subjectId, label: label.label })}
-            className="text-zinc-500 hover:text-zinc-100"
+            className="text-fg-dim hover:text-fg"
           >
             ×
           </button>
@@ -98,7 +98,7 @@ export function LabelChips({ subjectId }: { subjectId: string }) {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="add label"
-          className="w-28 rounded border border-border bg-bg-subtle px-2 py-0.5 text-xs"
+          className="w-28 rounded border border-ink-line bg-ink-subtle px-2 py-0.5 text-xs"
         />
       </form>
     </div>

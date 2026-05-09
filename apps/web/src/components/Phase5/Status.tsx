@@ -58,14 +58,14 @@ export function StatusPicker({ subjectId }: { subjectId: string }) {
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-xs uppercase tracking-wide text-zinc-500">
+      <span className="text-xs uppercase tracking-wide text-fg-dim">
         Status
       </span>
       <select
         value={current}
         disabled={status.isPending || mutate.isPending}
         onChange={(e) => mutate.mutate({ subjectId, status: e.target.value })}
-        className="rounded border border-border bg-bg-subtle px-2 py-1 text-xs"
+        className="rounded border border-ink-line bg-ink-subtle px-2 py-1 text-xs"
       >
         {options.length === 0 ? <option value="">(none)</option> : null}
         {options.map((s) => (

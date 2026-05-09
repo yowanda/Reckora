@@ -28,27 +28,27 @@ export function ActivityFeed({ subjectId }: { subjectId: string }) {
   });
 
   return (
-    <div className="rounded border border-border bg-bg-panel">
-      <header className="border-b border-border px-3 py-2 text-xs uppercase tracking-wide text-zinc-500">
+    <div className="overflow-hidden rounded-lg border border-ink-line bg-ink-panel">
+      <header className="border-b border-ink-line bg-ink-subtle/40 px-3 py-2 text-2xs font-medium uppercase tracking-[0.2em] text-fg-dim">
         Activity
       </header>
       <div className="p-3">
         {query.isPending ? <Spinner /> : null}
         {query.error ? <ErrorMessage error={query.error} /> : null}
         {query.data && query.data.length === 0 ? (
-          <p className="text-xs text-zinc-500">No activity yet.</p>
+          <p className="text-2xs text-fg-dim">No activity yet.</p>
         ) : null}
-        <ol className="space-y-2 text-xs">
+        <ol className="space-y-1.5 text-xs">
           {(query.data ?? []).map((event, i) => (
-            <li key={i} className="flex items-baseline gap-2">
-              <span className="text-zinc-300">
+            <li key={i} className="flex items-baseline gap-2 leading-relaxed">
+              <span className="font-medium text-fg">
                 {event.actor_username ?? "system"}
               </span>
-              <span className="text-zinc-500">{KIND_LABEL[event.kind]}</span>
+              <span className="text-fg-muted">{KIND_LABEL[event.kind]}</span>
               {event.target_username ? (
-                <span className="text-zinc-300">{event.target_username}</span>
+                <span className="font-medium text-fg">{event.target_username}</span>
               ) : null}
-              <span className="ml-auto shrink-0 text-zinc-500">
+              <span className="ml-auto shrink-0 text-2xs text-fg-dim">
                 {formatRelativeTime(event.created_at)}
               </span>
             </li>

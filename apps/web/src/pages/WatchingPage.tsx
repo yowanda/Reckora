@@ -1,12 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
 
 import { api, unwrap } from "@/api/client";
 import type { SavedDossierSummary } from "@/api/types";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorMessage } from "@/components/ErrorMessage";
+import { SavedDossierList } from "@/components/SavedDossierList";
 import { SkeletonList } from "@/components/Skeleton";
-import { formatRelativeTime, shortId } from "@/lib/format";
 
 async function fetchWatching(): Promise<SavedDossierSummary[]> {
   return unwrap(await api.GET("/api/v1/me/watching"));
@@ -19,13 +18,19 @@ export function WatchingPage() {
   });
 
   return (
-    <section className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Watching</h1>
-        <p className="text-sm text-zinc-500">
-          Subjects whose activity you follow.
+    <section className="space-y-5">
+      <header>
+        <div className="text-2xs font-medium uppercase tracking-[0.22em] text-fg-dim">
+          My queue
+        </div>
+        <h1 className="mt-1 text-2xl font-semibold tracking-snug text-fg">
+          Watching
+        </h1>
+        <p className="mt-1 text-sm text-fg-muted">
+          Subjects whose comments and status changes you follow.
         </p>
-      </div>
+      </header>
+
       {query.isPending ? <SkeletonList count={3} /> : null}
       {query.error ? <ErrorMessage error={query.error} /> : null}
       {query.data && query.data.length === 0 ? (
@@ -35,31 +40,16 @@ export function WatchingPage() {
           description="Open a subject and click ‘Watch’ to follow new comments and status changes."
         />
       ) : null}
-      {query.data ? (
-        <ul className="divide-y divide-border rounded border border-border bg-bg-panel">
-          {query.data.map((subject) => (
-            <li key={subject.id} className="px-4 py-3">
-              <Link
-                to={`/subjects/${subject.id}`}
-                className="block hover:bg-bg-subtle"
-              >
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="rounded bg-bg-subtle px-1.5 py-0.5 font-mono text-xs text-zinc-400">
-                    {subject.seed_identifier.type}
-                  </span>
-                  <span className="truncate font-medium">
-                    {subject.seed_identifier.value}
-                  </span>
-                </div>
-                <div className="mt-1 text-xs text-zinc-500">
-                  <span className="font-mono">{shortId(subject.id)}</span>
-                  <span className="mx-1">·</span>
-                  <span>created {formatRelativeTime(subject.created_at)}</span>
-                </div>
-              </Link>
-            </li>
-          ))}
-        </ul>
+      {query.data && query.data.length > 0 ? (
+        <SavedDossierList
+          items={query.data}
+          rowChip={() => (
+            <span className="inline-flex items-center gap-1 rounded border border-ok/30 bg-ok-soft px-1.5 py-0.5 text-2xs uppercase tracking-[0.12em] text-ok">
+              <span className="rk-live-dot inline-block h-1.5 w-1.5 rounded-full bg-ok" />
+              live
+            </span>
+          )}
+        />
       ) : null}
     </section>
   );

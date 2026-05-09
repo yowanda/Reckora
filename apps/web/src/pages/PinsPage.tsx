@@ -1,12 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
 
 import { api, unwrap } from "@/api/client";
 import type { SavedDossierSummary } from "@/api/types";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorMessage } from "@/components/ErrorMessage";
+import { SavedDossierList } from "@/components/SavedDossierList";
 import { SkeletonList } from "@/components/Skeleton";
-import { formatRelativeTime, shortId } from "@/lib/format";
 import { describeError, useToast } from "@/lib/toast";
 
 async function fetchPins(): Promise<SavedDossierSummary[]> {
@@ -35,13 +34,19 @@ export function PinsPage() {
   });
 
   return (
-    <section className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Pinned subjects</h1>
-        <p className="text-sm text-zinc-500">
+    <section className="space-y-5">
+      <header>
+        <div className="text-2xs font-medium uppercase tracking-[0.22em] text-fg-dim">
+          My queue
+        </div>
+        <h1 className="mt-1 text-2xl font-semibold tracking-snug text-fg">
+          Pinned
+        </h1>
+        <p className="mt-1 text-sm text-fg-muted">
           Quick access to the dossiers you have starred.
         </p>
-      </div>
+      </header>
+
       {query.isPending ? <SkeletonList count={3} /> : null}
       {query.error ? <ErrorMessage error={query.error} /> : null}
       {query.data && query.data.length === 0 ? (
@@ -51,43 +56,20 @@ export function PinsPage() {
           description="Open a subject and click ‘Pin’ to add it here for quick access."
         />
       ) : null}
-      {query.data ? (
-        <ul className="divide-y divide-border rounded border border-border bg-bg-panel">
-          {query.data.map((subject) => (
-            <li
-              key={subject.id}
-              className="flex items-center gap-3 px-4 py-3"
+      {query.data && query.data.length > 0 ? (
+        <SavedDossierList
+          items={query.data}
+          rowAction={(subject) => (
+            <button
+              type="button"
+              onClick={() => remove.mutate(subject.id)}
+              disabled={remove.isPending}
+              className="rounded border border-ink-line bg-ink-subtle px-2 py-1 text-2xs uppercase tracking-[0.18em] text-fg-muted transition-colors hover:border-danger/50 hover:text-danger disabled:opacity-50"
             >
-              <div className="min-w-0 flex-1">
-                <Link
-                  to={`/subjects/${subject.id}`}
-                  className="block hover:underline"
-                >
-                  <div className="flex items-center gap-2 text-sm">
-                    <span className="rounded bg-bg-subtle px-1.5 py-0.5 font-mono text-xs text-zinc-400">
-                      {subject.seed_identifier.type}
-                    </span>
-                    <span className="truncate font-medium">
-                      {subject.seed_identifier.value}
-                    </span>
-                  </div>
-                  <div className="mt-1 text-xs text-zinc-500">
-                    <span className="font-mono">{shortId(subject.id)}</span>
-                    <span className="mx-1">·</span>
-                    <span>created {formatRelativeTime(subject.created_at)}</span>
-                  </div>
-                </Link>
-              </div>
-              <button
-                type="button"
-                onClick={() => remove.mutate(subject.id)}
-                className="text-xs text-zinc-400 hover:text-zinc-100"
-              >
-                Unpin
-              </button>
-            </li>
-          ))}
-        </ul>
+              Unpin
+            </button>
+          )}
+        />
       ) : null}
     </section>
   );

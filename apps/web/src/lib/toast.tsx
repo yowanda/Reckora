@@ -106,35 +106,37 @@ function ToastItem({
   }, []);
 
   const palette: Record<ToastKind, string> = {
-    success: "border-emerald-700/60 bg-emerald-950/80 text-emerald-100",
-    error: "border-red-800/60 bg-red-950/80 text-red-100",
-    info: "border-zinc-700 bg-zinc-900/90 text-zinc-100",
+    success: "border-ok/30 bg-ok-soft text-fg",
+    error: "border-danger/30 bg-danger-soft text-fg",
+    info: "border-ink-line bg-ink-panel text-fg",
   };
   const dot: Record<ToastKind, string> = {
-    success: "bg-emerald-400",
-    error: "bg-red-400",
-    info: "bg-zinc-400",
+    success: "bg-ok",
+    error: "bg-danger",
+    info: "bg-fg-muted",
   };
 
   return (
     <div
       role="status"
-      className={`pointer-events-auto flex items-start gap-2 rounded border px-3 py-2 text-xs shadow-lg transition-opacity duration-200 ${
-        palette[toast.kind]
-      } ${visible ? "opacity-100" : "opacity-0"}`}
+      className={[
+        "pointer-events-auto flex items-start gap-2 rounded-lg border px-3 py-2 text-xs shadow-panel backdrop-blur transition-all duration-200",
+        palette[toast.kind],
+        visible ? "translate-x-0 opacity-100" : "translate-x-2 opacity-0",
+      ].join(" ")}
     >
       <span
         aria-hidden="true"
         className={`mt-1 inline-block h-2 w-2 flex-shrink-0 rounded-full ${dot[toast.kind]}`}
       />
-      <span className="flex-1 whitespace-pre-wrap break-words">
+      <span className="flex-1 whitespace-pre-wrap break-words leading-relaxed">
         {toast.text}
       </span>
       <button
         type="button"
         onClick={() => onDismiss(toast.id)}
         aria-label="Dismiss"
-        className="text-zinc-400 hover:text-zinc-100"
+        className="text-fg-dim transition-colors hover:text-fg"
       >
         ×
       </button>

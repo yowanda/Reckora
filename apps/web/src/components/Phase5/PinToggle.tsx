@@ -51,8 +51,8 @@ export function PinToggle({ subjectId }: { subjectId: string }) {
       onClick={() => setPinned.mutate(!pinned)}
       className={`rounded border px-2 py-1 text-xs ${
         pinned
-          ? "border-accent bg-accent-muted text-zinc-100"
-          : "border-border bg-bg-subtle text-zinc-300 hover:text-zinc-100"
+          ? "border-accent bg-accent-muted text-fg"
+          : "border-ink-line bg-ink-subtle text-fg hover:text-fg"
       }`}
     >
       {pinned ? "★ Pinned" : "☆ Pin"}
