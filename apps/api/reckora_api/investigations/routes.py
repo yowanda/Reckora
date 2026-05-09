@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
+from reckora.agent import AgentLoop, Researcher, ToolBudget
 from reckora.collectors.base import Collector
 from reckora.collectors.breach import BreachCollector
 from reckora.config import settings as engine_settings
@@ -146,10 +147,36 @@ async def create_investigation(
     summary_md: str | None = None
     hypotheses_md: str | None = None
     if payload.ai:
+        if payload.ai_tools and not engine_settings.openai_api_key:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "ai_tools=true requires OPENAI_API_KEY (ChatGPT OAuth tool "
+                    "calls are not currently supported)."
+                ),
+            )
         client = ReasoningClient(
             api_key=engine_settings.openai_api_key,
             model=engine_settings.openai_model,
         )
+        if payload.ai_iterations >= 1:
+            researcher: Researcher | None = None
+            if payload.ai_tools:
+                researcher = Researcher.with_default_tools(
+                    client=client,
+                    seed=seed,
+                    budget=ToolBudget(calls_remaining=payload.ai_tool_calls),
+                )
+            loop = AgentLoop(
+                orchestrator,
+                client,
+                max_iterations=payload.ai_iterations,
+                researcher=researcher,
+            )
+            result = await loop.run(seed)
+            subject = result.subject
+            traces = list(result.traces)
+            edges = list(result.edges)
         ident_strs = [str(i) for i in subject.identifiers]
         summary_md = await summarize(
             client,

@@ -3276,6 +3276,28 @@
             "description": "Run the LLM reasoning layer (summary + hypotheses).",
             "default": false
           },
+          "ai_iterations": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Ai Iterations",
+            "description": "Number of recursive AgentLoop rounds. 0 (default) = passive summary only. >=1 lets the LLM propose follow-up identifiers, verify them, and re-correlate, expanding the dossier graph.",
+            "default": 0
+          },
+          "ai_tools": {
+            "type": "boolean",
+            "title": "Ai Tools",
+            "description": "When ai_iterations >= 1, allow the AgentLoop's LLM to call web_search and fetch_url so it can gather evidence beyond what the rule-based collectors found. Requires OPENAI_API_KEY.",
+            "default": false
+          },
+          "ai_tool_calls": {
+            "type": "integer",
+            "maximum": 32.0,
+            "minimum": 1.0,
+            "title": "Ai Tool Calls",
+            "description": "Per-iteration tool-call budget when ai_tools is true.",
+            "default": 8
+          },
           "breach": {
             "type": "boolean",
             "title": "Breach",

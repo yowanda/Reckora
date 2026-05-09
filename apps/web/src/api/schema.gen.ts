@@ -1252,6 +1252,24 @@ export interface components {
              */
             ai: boolean;
             /**
+             * Ai Iterations
+             * @description Number of recursive AgentLoop rounds. 0 (default) = passive summary only. >=1 lets the LLM propose follow-up identifiers, verify them, and re-correlate, expanding the dossier graph.
+             * @default 0
+             */
+            ai_iterations: number;
+            /**
+             * Ai Tools
+             * @description When ai_iterations >= 1, allow the AgentLoop's LLM to call web_search and fetch_url so it can gather evidence beyond what the rule-based collectors found. Requires OPENAI_API_KEY.
+             * @default false
+             */
+            ai_tools: boolean;
+            /**
+             * Ai Tool Calls
+             * @description Per-iteration tool-call budget when ai_tools is true.
+             * @default 8
+             */
+            ai_tool_calls: number;
+            /**
              * Breach
              * @description Enable the Have I Been Pwned breach-lookup collector for email identifiers (requires HIBP_API_KEY; off by default).
              * @default false

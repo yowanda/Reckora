@@ -20,9 +20,17 @@ const KINDS = [
 
 type Kind = (typeof KINDS)[number];
 
+type ToggleKey =
+  | "archive"
+  | "screenshot"
+  | "ai"
+  | "ai_agent"
+  | "breach"
+  | "anchor";
+
 const TOGGLES: Array<{
   label: string;
-  key: "archive" | "screenshot" | "ai" | "breach" | "anchor";
+  key: ToggleKey;
   description: string;
 }> = [
   {
@@ -39,6 +47,12 @@ const TOGGLES: Array<{
     label: "ai",
     key: "ai",
     description: "Summarise + hypothesise via the configured LLM.",
+  },
+  {
+    label: "ai agent",
+    key: "ai_agent",
+    description:
+      "Recursive AgentLoop: LLM proposes follow-ups + can call web_search / fetch_url. Implies ai. Requires OPENAI_API_KEY.",
   },
   {
     label: "breach",
@@ -73,10 +87,11 @@ export function NewInvestigationPage() {
   const toast = useToast();
   const [kind, setKind] = useState<Kind>("username");
   const [value, setValue] = useState("");
-  const [flags, setFlags] = useState<Record<(typeof TOGGLES)[number]["key"], boolean>>({
+  const [flags, setFlags] = useState<Record<ToggleKey, boolean>>({
     archive: false,
     screenshot: false,
     ai: false,
+    ai_agent: false,
     breach: false,
     anchor: false,
   });
@@ -92,9 +107,17 @@ export function NewInvestigationPage() {
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const { ai_agent, ...rest } = flags;
     mutation.mutate({
       seed: { kind, value },
-      ...flags,
+      ...rest,
+      // ``ai_agent`` is a UI convenience: it implies ``ai`` (the LLM
+      // pipeline must run for the AgentLoop to mean anything) and
+      // sets sensible defaults for the recursive + tool-using flags.
+      ai: rest.ai || ai_agent,
+      ai_iterations: ai_agent ? 2 : 0,
+      ai_tools: ai_agent,
+      ai_tool_calls: 8,
     });
   }
 
