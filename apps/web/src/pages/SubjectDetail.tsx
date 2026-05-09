@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { api, unwrap } from "@/api/client";
 import type { SavedDossierPayload } from "@/api/types";
+import { DossierCards, viewDossier } from "@/components/Dossier";
 import { ErrorMessage } from "@/components/ErrorMessage";
 import { ActivityFeed } from "@/components/Phase5/Activity";
 import { Assignees } from "@/components/Phase5/Assignees";
@@ -73,9 +74,32 @@ function extractSeed(payload: SavedDossierPayload): SeedSnippet | null {
     (subject as Record<string, unknown>).type;
   const value = (subject as Record<string, unknown>).value;
   if (typeof kind !== "string" || typeof value !== "string") {
+    // Fall back to the structured `seed_identifier` shape used by the
+    // canonical `to_dossier_dict()` payload.
+    const seed = (subject as Record<string, unknown>).seed_identifier;
+    if (seed !== null && typeof seed === "object") {
+      const seedRecord = seed as Record<string, unknown>;
+      const seedKind = seedRecord.type;
+      const seedValue = seedRecord.value;
+      if (typeof seedKind === "string" && typeof seedValue === "string") {
+        return { kind: seedKind, value: seedValue };
+      }
+    }
     return null;
   }
   return { kind, value };
+}
+
+type ViewMode = "cards" | "markdown";
+
+const VIEW_MODE_STORAGE_KEY = "reckora.dossier.viewMode";
+
+function readStoredViewMode(): ViewMode {
+  if (typeof window === "undefined") {
+    return "cards";
+  }
+  const raw = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+  return raw === "markdown" ? "markdown" : "cards";
 }
 
 export function SubjectDetailPage() {
@@ -85,6 +109,15 @@ export function SubjectDetailPage() {
   const qc = useQueryClient();
   const toast = useToast();
 
+  const [viewMode, setViewMode] = useState<ViewMode>(readStoredViewMode);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode);
+  }, [viewMode]);
+
   const subject = useQuery({
     queryKey: ["subjects", subjectId, "summary"],
     queryFn: () => fetchSubject(subjectId),
@@ -93,7 +126,9 @@ export function SubjectDetailPage() {
   const dossier = useQuery({
     queryKey: ["subjects", subjectId, "dossier", "md"],
     queryFn: () => fetchDossier(subjectId),
-    enabled: subjectId !== "",
+    // Only spend the round-trip when the analyst actually wants the
+    // markdown view; the cards view derives everything from `subject`.
+    enabled: subjectId !== "" && viewMode === "markdown",
   });
 
   useEffect(() => {
@@ -114,6 +149,11 @@ export function SubjectDetailPage() {
     },
     onError: (error) => toast.push("error", describeError(error)),
   });
+
+  const dossierView = useMemo(
+    () => (subject.data ? viewDossier(subject.data) : null),
+    [subject.data],
+  );
 
   if (subjectId === "") {
     return null;
@@ -173,22 +213,34 @@ export function SubjectDetailPage() {
         </header>
 
         <article className="overflow-hidden rounded-lg border border-ink-line bg-ink-panel">
-          <div className="flex items-center justify-between border-b border-ink-line bg-ink-subtle/40 px-4 py-2 text-2xs font-medium uppercase tracking-[0.2em] text-fg-dim">
+          <div className="flex items-center justify-between gap-3 border-b border-ink-line bg-ink-subtle/40 px-4 py-2 text-2xs font-medium uppercase tracking-[0.2em] text-fg-dim">
             <span>Findings</span>
-            {dossier.data ? (
-              <span className="font-mono normal-case tracking-normal text-fg-dim">
-                {dossier.data.length.toLocaleString()} chars
-              </span>
-            ) : null}
+            <ViewModeToggle value={viewMode} onChange={setViewMode} />
           </div>
           <div className="p-4">
-            {dossier.isPending ? <Spinner label="Rendering dossier…" /> : null}
-            {dossier.error ? <ErrorMessage error={dossier.error} /> : null}
-            {dossier.data ? (
-              <div className="prose prose-invert prose-sm max-w-none">
-                <ReactMarkdown>{dossier.data}</ReactMarkdown>
-              </div>
-            ) : null}
+            {viewMode === "cards" ? (
+              <>
+                {subject.isPending ? (
+                  <Spinner label="Loading dossier…" />
+                ) : null}
+                {subject.error ? (
+                  <ErrorMessage error={subject.error} />
+                ) : null}
+                {dossierView ? <DossierCards view={dossierView} /> : null}
+              </>
+            ) : (
+              <>
+                {dossier.isPending ? (
+                  <Spinner label="Rendering dossier…" />
+                ) : null}
+                {dossier.error ? <ErrorMessage error={dossier.error} /> : null}
+                {dossier.data ? (
+                  <div className="prose prose-invert prose-sm max-w-none">
+                    <ReactMarkdown>{dossier.data}</ReactMarkdown>
+                  </div>
+                ) : null}
+              </>
+            )}
           </div>
         </article>
 
@@ -202,5 +254,60 @@ export function SubjectDetailPage() {
         <CrossReferences subjectId={subjectId} />
       </aside>
     </section>
+  );
+}
+
+function ViewModeToggle({
+  value,
+  onChange,
+}: {
+  value: ViewMode;
+  onChange: (next: ViewMode) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="Dossier view"
+      className="flex shrink-0 items-center gap-0.5 rounded border border-ink-line bg-ink-panel/80 p-0.5 normal-case tracking-normal"
+    >
+      <ViewModeButton
+        active={value === "cards"}
+        onClick={() => onChange("cards")}
+      >
+        Cards
+      </ViewModeButton>
+      <ViewModeButton
+        active={value === "markdown"}
+        onClick={() => onChange("markdown")}
+      >
+        Markdown
+      </ViewModeButton>
+    </div>
+  );
+}
+
+function ViewModeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={`rounded px-2 py-0.5 text-2xs font-medium uppercase tracking-[0.12em] transition-colors ${
+        active
+          ? "bg-accent-soft text-accent"
+          : "text-fg-muted hover:text-fg"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
