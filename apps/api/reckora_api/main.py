@@ -45,6 +45,7 @@ from reckora_api.dossier_status.routes import (
 from reckora_api.investigations.routes import router as investigations_router
 from reckora_api.labels.routes import labels_catalog_router, labels_router
 from reckora_api.mentions.routes import mentions_router
+from reckora_api.notes.routes import notes_router
 from reckora_api.pins.routes import pins_router
 from reckora_api.reactions.routes import router as reactions_router
 from reckora_api.watchers.routes import (
@@ -135,6 +136,7 @@ def create_app(
     app.include_router(me_watching_router, prefix="/api/v1")
     app.include_router(mentions_router, prefix="/api/v1")
     app.include_router(pins_router, prefix="/api/v1")
+    app.include_router(notes_router, prefix="/api/v1")
 
     # Mount captured screenshots so the frontend can render them inline. The
     # directory is created lazily — the app must not crash if screenshots are
