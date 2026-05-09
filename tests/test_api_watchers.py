@@ -333,7 +333,8 @@ def test_me_watching_is_per_actor(
     assert bob.get("/api/v1/me/watching").json() == []
     # But alice sees the dossier she just subscribed to.
     rows = alice.get("/api/v1/me/watching").json()
-    assert len(rows) == 1 and rows[0]["id"] == sid
+    assert len(rows) == 1
+    assert rows[0]["id"] == sid
 
 
 def test_me_watching_empty_when_no_subscriptions(
