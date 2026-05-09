@@ -138,6 +138,52 @@ class AssigneeRow:
     assigned_at: str
 
 
+@dataclass(frozen=True, slots=True)
+class ActivityRow:
+    """One event in :meth:`AccessRepository.list_activity`.
+
+    The activity feed is a chronological union over the four tables that
+    record observable mutations on a saved dossier: comments, assignees,
+    explicit shares, and the cross-trace anchor mint. We deliberately do
+    NOT model role flips or ownership transfers here — those live in
+    different layers and have their own audit story.
+
+    Field semantics
+    ---------------
+
+    * ``kind`` — one of ``"comment_added"``, ``"assigned"``, ``"shared"``,
+      ``"anchored"``. Stable strings so the API can wire-protocol them
+      without re-keying.
+    * ``actor_user_id`` — who *caused* the event:
+        - ``comment_added``: the comment author.
+        - ``assigned``: the user who granted the assignment
+          (``subject_assignees.assigned_by``); may be ``None`` if that
+          user has since been deleted (the row survives via
+          ``ON DELETE SET NULL``).
+        - ``shared``: ``None`` — the share schema does not yet record a
+          granter; we surface the row anyway so the feed reflects access
+          changes, but the actor column is intentionally blank.
+        - ``anchored``: ``None`` — the anchor is minted by the engine,
+          not a specific user.
+    * ``target_user_id`` — the user the event is *about*, when one
+      exists:
+        - ``assigned`` / ``shared``: the user gaining access.
+        - ``comment_added`` / ``anchored``: ``None``.
+    * ``excerpt`` — for ``comment_added``, a leading slice of the comment
+      body (max 200 chars) so the feed renders without a second
+      round-trip; ``None`` for the other kinds.
+    * ``created_at`` — ISO-8601 timestamp from the underlying row. For
+      ``anchored`` we pull from the parent subject row because the
+      ``dossier_anchors`` table does not store a timestamp of its own.
+    """
+
+    kind: str
+    actor_user_id: int | None
+    target_user_id: int | None
+    excerpt: str | None
+    created_at: str
+
+
 class AccessRepository:
     """Owner / share / assignment / comment book-keeping for saved dossiers.
 
@@ -574,6 +620,105 @@ class AccessRepository:
                 matched_created_at=str(created_at),
             )
             for itype, ivalue, sid, seed_kind, seed_value, created_at in rows
+        ]
+
+    def list_activity(
+        self,
+        subject_id: str,
+        *,
+        limit: int = 50,
+        excerpt_chars: int = 200,
+    ) -> list[ActivityRow]:
+        """Chronological activity feed for ``subject_id`` (newest first).
+
+        Aggregates four event kinds out of the existing tables — without
+        adding a separate ``activity`` table — so anything that already
+        gets persisted (a comment, an assignment, a share, an anchor
+        mint) automatically shows up here without a second write path
+        that could drift. Conversely, an event we *don't* persist (a
+        delete, an ownership change) is intentionally not reflected; we
+        prefer "missing but consistent" over "synthesised guess".
+
+        Ordering
+        --------
+
+        SQLite's lexical TEXT compare matches ISO-8601 ordering, so a
+        ``datetime(created_at) DESC`` sort gives us a stable feed. Within
+        a single millisecond, ``tiebreak DESC`` keeps the order stable
+        across calls — the comment auto-id, then the assignee/share user
+        id, then ``0`` for anchors. The two non-zero tiebreakers are
+        unique per event kind, so distinct events never collide.
+
+        Parameters
+        ----------
+        limit:
+            Cap on returned rows. Negative or zero short-circuits to an
+            empty list to mirror :meth:`list_visible_summaries`.
+        excerpt_chars:
+            Max characters of comment body included in ``excerpt``;
+            longer comments are truncated client-side as well, but we
+            cap server-side too so a 10k-char comment doesn't bloat the
+            feed payload by 50x.
+        """
+        if limit <= 0:
+            return []
+        rows = self._conn.execute(
+            """
+            SELECT kind, actor_id, target_id, excerpt, ts FROM (
+                SELECT
+                    'comment_added'                    AS kind,
+                    author_user_id                     AS actor_id,
+                    NULL                               AS target_id,
+                    SUBSTR(body, 1, :excerpt_chars)    AS excerpt,
+                    created_at                         AS ts,
+                    id                                 AS tiebreak
+                FROM subject_comments
+                WHERE subject_id = :sid
+                UNION ALL
+                SELECT
+                    'assigned',
+                    assigned_by,
+                    user_id,
+                    NULL,
+                    assigned_at,
+                    user_id
+                FROM subject_assignees
+                WHERE subject_id = :sid
+                UNION ALL
+                SELECT
+                    'shared',
+                    NULL,
+                    user_id,
+                    NULL,
+                    created_at,
+                    user_id
+                FROM subject_shares
+                WHERE subject_id = :sid
+                UNION ALL
+                SELECT
+                    'anchored',
+                    NULL,
+                    NULL,
+                    NULL,
+                    (SELECT created_at FROM subjects WHERE id = :sid),
+                    0
+                FROM dossier_anchors
+                WHERE subject_id = :sid
+            )
+            ORDER BY datetime(ts) DESC, tiebreak DESC
+            LIMIT :limit
+            """,
+            {"sid": subject_id, "excerpt_chars": excerpt_chars, "limit": limit},
+        ).fetchall()
+        return [
+            ActivityRow(
+                kind=str(kind),
+                actor_user_id=None if actor_id is None else int(actor_id),
+                target_user_id=None if target_id is None else int(target_id),
+                excerpt=None if excerpt is None else str(excerpt),
+                created_at=str(ts),
+            )
+            for kind, actor_id, target_id, excerpt, ts in rows
         ]
 
     def list_visible_summaries(
