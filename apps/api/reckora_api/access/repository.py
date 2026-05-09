@@ -36,6 +36,29 @@ from reckora.models.enums import IdentifierType
 from reckora.persistence.repository import SavedDossierSummary
 
 _VisibleRow = tuple[str, str, str, str, str, str | None, str | None, int, int, int]
+# (identifier_type, identifier_value,
+#  matched_subject_id, matched_seed_kind, matched_seed_value, matched_created_at)
+_CrossRefRow = tuple[str, str, str, str, str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class CrossReferenceRow:
+    """One ``(shared identifier, matched subject)`` pair.
+
+    A single source dossier produces at most one row per
+    ``(matched_subject_id, identifier_type, identifier_value)`` triple.
+    Two dossiers that overlap on N identifiers emit N rows; callers
+    group by ``(identifier_type, identifier_value)`` to render the
+    "this identifier appears in M other dossiers" view.
+    """
+
+    identifier_type: str
+    identifier_value: str
+    matched_subject_id: str
+    matched_seed_kind: str
+    matched_seed_value: str
+    matched_created_at: str
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS subject_owners(
@@ -509,6 +532,39 @@ class AccessRepository:
         self._conn.commit()
         return cur.rowcount > 0
 
+    def update_comment(
+        self,
+        comment_id: int,
+        body: str,
+        *,
+        updated_at: str,
+    ) -> CommentRow | None:
+        """Replace a comment's body and stamp ``updated_at``.
+
+        Returns the freshly-updated row, or ``None`` if no comment with
+        ``comment_id`` exists. The caller is responsible for the
+        authorisation decision (only the comment author should be able
+        to edit) and for validating the body — we do the minimum
+        ``UPDATE`` here so the repository stays a thin SQL wrapper.
+
+        We deliberately do NOT touch ``created_at``: clients render
+        edits with a "(edited)" badge by checking
+        ``updated_at is not None``, so ``created_at`` must remain
+        the original anchor.
+        """
+        cur = self._conn.execute(
+            """
+            UPDATE subject_comments
+            SET body = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (body, updated_at, comment_id),
+        )
+        self._conn.commit()
+        if cur.rowcount == 0:
+            return None
+        return self.get_comment(comment_id)
+
     # -- visibility helpers ----------------------------------------------
 
     def can_read(self, subject_id: str, user_id: int) -> bool:
@@ -536,6 +592,107 @@ class AccessRepository:
             {"sid": subject_id, "uid": user_id},
         ).fetchone()
         return row is not None
+
+    def list_cross_references(
+        self,
+        source_subject_id: str,
+        *,
+        user_id: int,
+        is_admin: bool,
+    ) -> list[CrossReferenceRow]:
+        """List ``(shared identifier, matched subject)`` rows for ``source_subject_id``.
+
+        For each identifier on the source dossier, return every *other*
+        subject that lists the same identifier *and* is visible to the
+        actor:
+
+        - **Admins** see every match (including legacy un-owned dossiers
+          created by the CLI).
+        - **Viewers** see matches they own or have explicitly been
+          shared.
+
+        Rows are ordered by identifier (type then value, deterministic
+        across calls), then by ``created_at DESC, id DESC`` within each
+        identifier group, so the API can stream them straight into a
+        grouped response without an in-memory re-sort.
+
+        We materialise this against the engine's
+        :class:`reckora.persistence.sqlite.SQLiteSubjectRepository`'s
+        ``subject_identifiers`` index (added in Phase 5) — without that
+        denormalised table the query would have to JSON-scan every
+        ``identifiers_json`` blob.
+        """
+        if is_admin:
+            rows: list[_CrossRefRow] = self._conn.execute(
+                """
+                SELECT
+                    si_other.identifier_type,
+                    si_other.identifier_value,
+                    other.id,
+                    other.seed_kind,
+                    other.seed_value,
+                    other.created_at
+                FROM subject_identifiers si_source
+                JOIN subject_identifiers si_other
+                    ON  si_other.identifier_type  = si_source.identifier_type
+                    AND si_other.identifier_value = si_source.identifier_value
+                    AND si_other.subject_id      != si_source.subject_id
+                JOIN subjects other ON other.id = si_other.subject_id
+                WHERE si_source.subject_id = :source
+                ORDER BY
+                    si_other.identifier_type ASC,
+                    si_other.identifier_value ASC,
+                    datetime(other.created_at) DESC,
+                    other.id DESC
+                """,
+                {"source": source_subject_id},
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                SELECT
+                    si_other.identifier_type,
+                    si_other.identifier_value,
+                    other.id,
+                    other.seed_kind,
+                    other.seed_value,
+                    other.created_at
+                FROM subject_identifiers si_source
+                JOIN subject_identifiers si_other
+                    ON  si_other.identifier_type  = si_source.identifier_type
+                    AND si_other.identifier_value = si_source.identifier_value
+                    AND si_other.subject_id      != si_source.subject_id
+                JOIN subjects other ON other.id = si_other.subject_id
+                WHERE si_source.subject_id = :source
+                  AND (
+                      EXISTS (
+                          SELECT 1 FROM subject_owners o
+                          WHERE o.subject_id = other.id AND o.owner_user_id = :uid
+                      )
+                      OR EXISTS (
+                          SELECT 1 FROM subject_shares sh
+                          WHERE sh.subject_id = other.id AND sh.user_id = :uid
+                      )
+                  )
+                ORDER BY
+                    si_other.identifier_type ASC,
+                    si_other.identifier_value ASC,
+                    datetime(other.created_at) DESC,
+                    other.id DESC
+                """,
+                {"source": source_subject_id, "uid": user_id},
+            ).fetchall()
+        return [
+            CrossReferenceRow(
+                identifier_type=str(itype),
+                identifier_value=str(ivalue),
+                matched_subject_id=str(sid),
+                matched_seed_kind=str(seed_kind),
+                matched_seed_value=str(seed_value),
+                matched_created_at=str(created_at),
+            )
+            for itype, ivalue, sid, seed_kind, seed_value, created_at in rows
+        ]
 
     def list_visible_summaries(
         self,
