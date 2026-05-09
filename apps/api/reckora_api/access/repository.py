@@ -152,6 +152,18 @@ CREATE TABLE IF NOT EXISTS subject_labels(
 
 CREATE INDEX IF NOT EXISTS idx_subject_labels_label
     ON subject_labels(label);
+
+CREATE TABLE IF NOT EXISTS subject_status(
+    subject_id TEXT PRIMARY KEY
+        REFERENCES subjects(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    updated_by INTEGER
+        REFERENCES users(id) ON DELETE SET NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_subject_status_status
+    ON subject_status(status);
 """
 
 
@@ -268,6 +280,24 @@ class LabelRow:
     label: str
     created_by: int | None
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class StatusRow:
+    """One row in :meth:`AccessRepository.get_status`.
+
+    Each subject has at most one status row; the absence of a row
+    means the dossier is in the implicit "open" state. We store the
+    explicit row only when somebody changes the status away from
+    open, *or* sets it back to open after a previous transition —
+    that way the audit trail (``updated_at`` / ``updated_by``) is
+    preserved even on a return-to-open.
+    """
+
+    subject_id: str
+    status: str
+    updated_by: int | None
+    updated_at: str
 
 
 class AccessRepository:
@@ -861,6 +891,103 @@ class AccessRepository:
                 {"uid": user_id},
             ).fetchall()
         return [(str(lab), int(n)) for lab, n in rows]
+
+    # -- status -----------------------------------------------------------
+
+    def get_status(self, subject_id: str) -> StatusRow | None:
+        """Return the explicit status row for a subject, or ``None``.
+
+        ``None`` here means "no row in subject_status" — the route
+        layer projects this into the default ``"open"`` state. We
+        deliberately don't synthesise a fake row at the repository
+        level so callers can distinguish "never moved off the
+        default" from "explicitly re-opened" if they care.
+        """
+        row = self._conn.execute(
+            """
+            SELECT subject_id, status, updated_by, updated_at
+            FROM subject_status WHERE subject_id = ?
+            """,
+            (subject_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        sid, st, ub, ts = row
+        return StatusRow(
+            subject_id=str(sid),
+            status=str(st),
+            updated_by=None if ub is None else int(ub),
+            updated_at=str(ts),
+        )
+
+    def set_status(
+        self,
+        subject_id: str,
+        status: str,
+        *,
+        updated_by: int | None,
+        updated_at: str,
+    ) -> StatusRow:
+        """Upsert the status row for a subject. Returns the new row.
+
+        We always write a row (even on transitions to the default
+        ``"open"`` state) so the audit trail of who last touched
+        the dossier survives ping-pong transitions like
+        open → closed → open.
+        """
+        self._conn.execute(
+            """
+            INSERT INTO subject_status(subject_id, status, updated_by, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(subject_id) DO UPDATE SET
+                status = excluded.status,
+                updated_by = excluded.updated_by,
+                updated_at = excluded.updated_at
+            """,
+            (subject_id, status, updated_by, updated_at),
+        )
+        self._conn.commit()
+        return StatusRow(
+            subject_id=subject_id,
+            status=status,
+            updated_by=updated_by,
+            updated_at=updated_at,
+        )
+
+    def status_counts(self, user_id: int, *, is_admin: bool = False) -> dict[str, int]:
+        """Return ``{status: count}`` for dossiers visible to the actor.
+
+        Powers the sidebar's status-bucket headers (``Open (12) /
+        On hold (3) / Closed (47)``). The ``"open"`` bucket includes
+        every visible dossier *without* an explicit status row, so a
+        brand-new dossier counts as open even before the route layer
+        materialises a row for it.
+        """
+        if is_admin:
+            visible_subjects_sql = "SELECT id AS subject_id FROM subjects"
+            params: dict[str, object] = {}
+        else:
+            visible_subjects_sql = """
+                SELECT subject_id FROM subject_owners    WHERE owner_user_id = :uid
+                UNION
+                SELECT subject_id FROM subject_shares    WHERE user_id       = :uid
+                UNION
+                SELECT subject_id FROM subject_assignees WHERE user_id       = :uid
+            """
+            params = {"uid": user_id}
+
+        rows = self._conn.execute(
+            f"""
+            SELECT
+                COALESCE(s.status, 'open') AS bucket,
+                COUNT(*) AS n
+            FROM ({visible_subjects_sql}) AS visible
+            LEFT JOIN subject_status s ON s.subject_id = visible.subject_id
+            GROUP BY bucket
+            """,
+            params,
+        ).fetchall()
+        return {str(bucket): int(n) for bucket, n in rows}
 
     # -- visibility helpers ----------------------------------------------
 
