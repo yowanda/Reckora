@@ -14,7 +14,7 @@ AI-native OSINT investigation — entity resolution, evidence-graph reasoning, e
 | 6 | Confidence Scoring — per-edge `confidence`, `reasons[]`, `supporting_evidence[]` | done |
 | 7 | Evidence Chain — SHA-256 + Wayback, screenshots, Merkle root, OpenTimestamps | done |
 | 8 | Graph — NetworkX in-process; optional Neo4j adapter (`[neo4j]` extra) | done |
-| 9 | Reporting — JSON / Markdown / HTML / PDF dossiers, timeline + anomalies | partial |
+| 9 | Reporting — JSON / NDJSON / Markdown / HTML / PDF dossiers, timeline + anomalies | done |
 | 10 | Web UI — FastAPI backend (`apps/api/`) + Vite + React + TS SPA (`apps/web/`) | landed |
 
 ## Phases
