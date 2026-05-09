@@ -48,11 +48,11 @@ from reckora_api.mentions.routes import mentions_router
 from reckora_api.notes.routes import notes_router
 from reckora_api.pins.routes import pins_router
 from reckora_api.reactions.routes import router as reactions_router
+from reckora_api.visits.routes import visits_router
 from reckora_api.watchers.routes import (
     me_watching_router,
     watchers_router,
 )
-from reckora_api.visits.routes import visits_router
 from reckora_api.xref.routes import router as xref_router
 
 
