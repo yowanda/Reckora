@@ -147,14 +147,11 @@ async def create_investigation(
     summary_md: str | None = None
     hypotheses_md: str | None = None
     if payload.ai:
-        if payload.ai_tools and not engine_settings.openai_api_key:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "ai_tools=true requires OPENAI_API_KEY (ChatGPT OAuth tool "
-                    "calls are not currently supported)."
-                ),
-            )
+        # Both auth paths (OPENAI_API_KEY and ChatGPT OAuth) now drive
+        # function calling natively, so ``ai_tools=true`` no longer
+        # requires an API key. ReasoningClient resolves credentials
+        # lazily and raises ToolsNotSupportedError if neither path is
+        # configured at request time.
         client = ReasoningClient(
             api_key=engine_settings.openai_api_key,
             model=engine_settings.openai_model,

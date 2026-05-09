@@ -44,19 +44,24 @@ from typing import Any
 import httpx
 from openai import AsyncOpenAI
 
-from ..auth.codex_client import complete_via_codex
+from ..auth.codex_client import (
+    CodexFunctionCall,
+    CodexResponsesTurn,
+    complete_via_codex,
+    complete_with_tools_via_codex,
+)
 from ..auth.oauth import OAuthCredentials, refresh_credentials
 from ..auth.storage import load_credentials, save_credentials
 
 
 class ToolsNotSupportedError(RuntimeError):
-    """Raised when the current auth path can't drive function calls.
+    """Raised when the current process has no usable LLM credentials at all.
 
-    The ChatGPT Codex Responses backend does not yet ship a stable,
-    first-party tool-call format we can target without reverse-
-    engineering, so OAuth-only deployments fall back to the legacy
-    summarize/hypothesize prompts. API-key deployments get the full
-    tool-using AgentLoop.
+    Both the chat-completions (API-key) and the Responses (OAuth)
+    paths support tool calling natively, so this exception is now
+    only used when neither auth path is configured. Kept as a
+    distinct type so older callers can still ``except`` on it
+    without a behaviour change.
     """
 
 
@@ -167,17 +172,43 @@ class ReasoningClient:
         """Single-turn chat completion with tool calling enabled.
 
         Caller manages the conversation array — appending the assistant
-        message, tool result messages, and re-calling this method until
-        the model returns plain content. We surface only the API-key
-        path here: ChatGPT OAuth's Responses backend has a different
-        tool-call wire format that we don't currently model, so the
-        agent's tool-using path is gated to ``OPENAI_API_KEY`` users.
+        message, tool result messages, and re-calling this method
+        until the model returns plain content. The conversation /
+        tool format is the chat-completions wire shape; the OAuth
+        path translates it on the fly to the Responses-API shape
+        (which is what ``chatgpt.com/backend-api/codex/responses``
+        natively speaks).
+
+        Dispatch order matches :meth:`complete`: explicit
+        ``OPENAI_API_KEY`` wins, otherwise ChatGPT OAuth, otherwise
+        :class:`ToolsNotSupportedError` (no usable credentials).
         """
-        if not self._api_key:
-            raise ToolsNotSupportedError(
-                "tool-using AgentLoop requires OPENAI_API_KEY; "
-                "ChatGPT OAuth is not currently supported for tool calls"
+        if self._api_key:
+            return await self._chat_with_tools_via_api_key(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
             )
+        creds = self._oauth_credentials or load_credentials(path=self._credentials_path)
+        if creds is None:
+            raise ToolsNotSupportedError(
+                "tool-using AgentLoop requires either OPENAI_API_KEY or a "
+                "successful `reckora auth login`"
+            )
+        return await self._chat_with_tools_via_oauth(
+            credentials=creds,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+
+    async def _chat_with_tools_via_api_key(
+        self,
+        *,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]],
+        tool_choice: str,
+    ) -> AssistantTurn:
         client = self._get_openai_client()
         # The OpenAI SDK's ``messages``/``tools`` parameters are typed
         # as a Union of TypedDicts; we hand-roll dicts here because the
@@ -211,6 +242,54 @@ class ReasoningClient:
             content=choice.content or "",
             tool_calls=tuple(decoded_calls),
         )
+
+    async def _chat_with_tools_via_oauth(
+        self,
+        *,
+        credentials: OAuthCredentials,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]],
+        tool_choice: str,
+    ) -> AssistantTurn:
+        """Drive function calling through the ChatGPT Codex Responses API.
+
+        Translates the chat-completions ``messages`` array to the
+        Responses ``input`` array (with the system prompt hoisted to
+        ``instructions``) and the chat-completions ``tools`` shape to
+        the flat Responses ``tools`` shape, calls the codex helper,
+        and translates the response back into an
+        :class:`AssistantTurn` so the caller is unaware of the
+        backend dispatch.
+        """
+        instructions, input_items = _messages_to_responses_input(messages)
+        responses_tools = _tools_to_responses_tools(tools)
+        if credentials.is_expired():
+            credentials = await self._refresh_and_persist(credentials)
+        http = self._get_http_client()
+        try:
+            turn = await complete_with_tools_via_codex(
+                model=self._oauth_model,
+                instructions=instructions,
+                input_items=input_items,
+                tools=responses_tools,
+                tool_choice=tool_choice,
+                access_token=credentials.access_token,
+                client=http,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 401:
+                raise
+            credentials = await self._refresh_and_persist(credentials)
+            turn = await complete_with_tools_via_codex(
+                model=self._oauth_model,
+                instructions=instructions,
+                input_items=input_items,
+                tools=responses_tools,
+                tool_choice=tool_choice,
+                access_token=credentials.access_token,
+                client=http,
+            )
+        return _responses_turn_to_assistant_turn(turn)
 
     async def _complete_via_oauth(
         self,
@@ -293,3 +372,142 @@ class ReasoningClient:
         if openai_client is not None:
             await openai_client.close()
             self._openai = None
+
+
+def _messages_to_responses_input(
+    messages: Sequence[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Translate chat-completions messages to Responses-API ``input``.
+
+    Returns a tuple of ``(instructions, input_items)``:
+
+    * ``instructions`` — the concatenated content of every ``system``
+      message. Responses-API hoists the system prompt out of the
+      conversation array.
+    * ``input_items`` — every non-system message, mapped to the
+      Responses item shape:
+
+      - ``role: user|assistant`` with string content → a ``message``
+        item carrying ``input_text`` / ``output_text`` content
+        items.
+      - ``role: assistant`` with ``tool_calls`` → one
+        ``function_call`` item per tool call (the assistant's text,
+        if any, is preserved as a sibling ``message`` item).
+      - ``role: tool`` with ``tool_call_id`` → a
+        ``function_call_output`` item.
+    """
+    instructions_parts: list[str] = []
+    input_items: list[dict[str, Any]] = []
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "system":
+            if isinstance(content, str) and content:
+                instructions_parts.append(content)
+            continue
+        if role == "tool":
+            call_id = msg.get("tool_call_id")
+            if not isinstance(call_id, str):
+                continue
+            output_text = content if isinstance(content, str) else json.dumps(content)
+            input_items.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": output_text,
+                }
+            )
+            continue
+        if role == "assistant":
+            if isinstance(content, str) and content:
+                input_items.append(
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": content}],
+                    }
+                )
+            tool_calls = msg.get("tool_calls") or []
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function") or {}
+                name = function.get("name")
+                arguments = function.get("arguments")
+                call_id = call.get("id")
+                if not isinstance(name, str) or not isinstance(call_id, str):
+                    continue
+                if isinstance(arguments, dict):
+                    arguments = json.dumps(arguments)
+                if not isinstance(arguments, str):
+                    arguments = "{}"
+                input_items.append(
+                    {
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": arguments,
+                    }
+                )
+            continue
+        if role == "user":
+            text = content if isinstance(content, str) else json.dumps(content)
+            input_items.append(
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                }
+            )
+            continue
+    return "\n\n".join(instructions_parts), input_items
+
+
+def _tools_to_responses_tools(
+    tools: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Flatten chat-completions ``{type: function, function: {...}}`` tools.
+
+    The Responses API expects the function fields at the top level of
+    each tool entry (``type``, ``name``, ``description``,
+    ``parameters``), not nested under a ``function`` key.
+    """
+    out: list[dict[str, Any]] = []
+    for spec in tools:
+        if spec.get("type") != "function":
+            # Non-function tools (e.g. built-in web search) are
+            # already in the Responses shape — pass through.
+            out.append(dict(spec))
+            continue
+        fn = spec.get("function") or {}
+        flattened = {
+            "type": "function",
+            "name": fn.get("name", ""),
+            "description": fn.get("description", ""),
+            "parameters": fn.get("parameters") or {},
+        }
+        out.append(flattened)
+    return out
+
+
+def _responses_turn_to_assistant_turn(turn: CodexResponsesTurn) -> AssistantTurn:
+    """Translate a Codex Responses turn into the chat-completions shape."""
+    decoded_calls: list[AssistantToolCall] = []
+    for call in turn.function_calls:
+        decoded_calls.append(_function_call_to_assistant_tool_call(call))
+    return AssistantTurn(content=turn.content, tool_calls=tuple(decoded_calls))
+
+
+def _function_call_to_assistant_tool_call(call: CodexFunctionCall) -> AssistantToolCall:
+    """Decode a Codex function call into the agent's chat-completions shape."""
+    try:
+        arguments = json.loads(call.arguments) if call.arguments else {}
+    except (json.JSONDecodeError, TypeError):
+        arguments = {}
+    if not isinstance(arguments, dict):
+        arguments = {}
+    return AssistantToolCall(
+        id=call.call_id,
+        name=call.name,
+        arguments=arguments,
+    )
