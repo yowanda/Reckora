@@ -71,6 +71,10 @@ async def test_request_carries_bearer_token_and_codex_body_shape(
     assert body["stream"] is True
     # Codex Responses API expects a typed input array, not a flat list.
     assert body["input"] == [{"role": "user", "content": [{"type": "input_text", "text": "usr"}]}]
+    # ChatGPT-account requests must opt out of response storage; the
+    # backend rejects requests that omit (or set true) ``store`` with
+    # a ``400 {"detail":"Store must be set to false"}``.
+    assert body["store"] is False
 
 
 async def test_falls_back_to_completed_event_when_no_deltas(
