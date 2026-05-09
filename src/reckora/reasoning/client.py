@@ -34,8 +34,12 @@ upstream so the user can re-login.
 
 from __future__ import annotations
 
+import json
 import os
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 from openai import AsyncOpenAI
@@ -43,6 +47,44 @@ from openai import AsyncOpenAI
 from ..auth.codex_client import complete_via_codex
 from ..auth.oauth import OAuthCredentials, refresh_credentials
 from ..auth.storage import load_credentials, save_credentials
+
+
+class ToolsNotSupportedError(RuntimeError):
+    """Raised when the current auth path can't drive function calls.
+
+    The ChatGPT Codex Responses backend does not yet ship a stable,
+    first-party tool-call format we can target without reverse-
+    engineering, so OAuth-only deployments fall back to the legacy
+    summarize/hypothesize prompts. API-key deployments get the full
+    tool-using AgentLoop.
+    """
+
+
+@dataclass(frozen=True)
+class AssistantToolCall:
+    """One ``tool_calls`` entry returned by the chat-completions API.
+
+    ``arguments`` is already JSON-decoded — the upstream API sends it
+    as a string. Decoding once at the boundary keeps the rest of the
+    agent code working with plain dicts.
+    """
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AssistantTurn:
+    """A single assistant message, possibly carrying tool calls.
+
+    Either ``content`` is a non-empty string and ``tool_calls`` is
+    empty (the model is done) or ``tool_calls`` is non-empty and the
+    caller is expected to execute them and feed the results back.
+    """
+
+    content: str
+    tool_calls: tuple[AssistantToolCall, ...] = ()
 
 
 class ReasoningClient:
@@ -114,6 +156,61 @@ class ReasoningClient:
             temperature=self._temperature,
         )
         return resp.choices[0].message.content or ""
+
+    async def chat_with_tools(
+        self,
+        *,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]],
+        tool_choice: str = "auto",
+    ) -> AssistantTurn:
+        """Single-turn chat completion with tool calling enabled.
+
+        Caller manages the conversation array — appending the assistant
+        message, tool result messages, and re-calling this method until
+        the model returns plain content. We surface only the API-key
+        path here: ChatGPT OAuth's Responses backend has a different
+        tool-call wire format that we don't currently model, so the
+        agent's tool-using path is gated to ``OPENAI_API_KEY`` users.
+        """
+        if not self._api_key:
+            raise ToolsNotSupportedError(
+                "tool-using AgentLoop requires OPENAI_API_KEY; "
+                "ChatGPT OAuth is not currently supported for tool calls"
+            )
+        client = self._get_openai_client()
+        # The OpenAI SDK's ``messages``/``tools`` parameters are typed
+        # as a Union of TypedDicts; we hand-roll dicts here because the
+        # tool-call message shape only needs runtime correctness, not a
+        # static commitment to one of the TypedDict variants.
+        resp = await client.chat.completions.create(  # type: ignore[call-overload]
+            model=self._model,
+            messages=list(messages),
+            tools=list(tools),
+            tool_choice=tool_choice,
+            temperature=self._temperature,
+        )
+        choice = resp.choices[0].message
+        raw_calls = getattr(choice, "tool_calls", None) or []
+        decoded_calls: list[AssistantToolCall] = []
+        for call in raw_calls:
+            try:
+                arguments = json.loads(call.function.arguments or "{}")
+            except (json.JSONDecodeError, TypeError):
+                arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            decoded_calls.append(
+                AssistantToolCall(
+                    id=call.id,
+                    name=call.function.name,
+                    arguments=arguments,
+                )
+            )
+        return AssistantTurn(
+            content=choice.content or "",
+            tool_calls=tuple(decoded_calls),
+        )
 
     async def _complete_via_oauth(
         self,

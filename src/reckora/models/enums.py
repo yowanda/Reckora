@@ -43,6 +43,7 @@ class TraceSource(StrEnum):
     TIKTOK_WEB = "tiktok_web"
     SOCIAL_PRESENCE_PROBE = "social_presence_probe"
     USER_PROVIDED = "user_provided"
+    WEB_RESEARCH = "web_research"
 
 
 class EdgeKind(StrEnum):

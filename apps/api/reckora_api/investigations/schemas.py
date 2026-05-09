@@ -39,6 +39,30 @@ class InvestigationRequest(BaseModel):
         default=False,
         description="Run the LLM reasoning layer (summary + hypotheses).",
     )
+    ai_iterations: int = Field(
+        default=0,
+        ge=0,
+        le=10,
+        description=(
+            "Number of recursive AgentLoop rounds. 0 (default) = passive "
+            "summary only. >=1 lets the LLM propose follow-up identifiers, "
+            "verify them, and re-correlate, expanding the dossier graph."
+        ),
+    )
+    ai_tools: bool = Field(
+        default=False,
+        description=(
+            "When ai_iterations >= 1, allow the AgentLoop's LLM to call "
+            "web_search and fetch_url so it can gather evidence beyond "
+            "what the rule-based collectors found. Requires OPENAI_API_KEY."
+        ),
+    )
+    ai_tool_calls: int = Field(
+        default=8,
+        ge=1,
+        le=32,
+        description="Per-iteration tool-call budget when ai_tools is true.",
+    )
     breach: bool = Field(
         default=False,
         description=(

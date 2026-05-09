@@ -28,6 +28,15 @@ landed in Phase 4 Path B.
 from __future__ import annotations
 
 from .loop import AgentLoop, AgentLoopResult, AgentTranscriptStep
+from .research import Researcher
+from .tools import (
+    ToolBudget,
+    ToolInvocation,
+    ToolResult,
+    ToolRunSummary,
+    ToolSpec,
+    builtin_tools,
+)
 from .verifier import (
     ProposedIdentifier,
     VerificationResult,
@@ -41,8 +50,15 @@ __all__ = [
     "AgentLoopResult",
     "AgentTranscriptStep",
     "ProposedIdentifier",
+    "Researcher",
+    "ToolBudget",
+    "ToolInvocation",
+    "ToolResult",
+    "ToolRunSummary",
+    "ToolSpec",
     "VerificationResult",
     "Verifier",
     "VerifierRejection",
+    "builtin_tools",
     "parse_plan",
 ]
