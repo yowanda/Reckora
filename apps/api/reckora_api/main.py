@@ -38,6 +38,7 @@ from reckora_api.auth.routes import users_router as auth_users_router
 from reckora_api.collab.routes import assignees_router, comments_router
 from reckora_api.config import APISettings
 from reckora_api.investigations.routes import router as investigations_router
+from reckora_api.xref.routes import router as xref_router
 from reckora_api.watchers.routes import (
     me_watching_router,
     watchers_router,
@@ -114,6 +115,7 @@ def create_app(
     app.include_router(sharing_router, prefix="/api/v1")
     app.include_router(comments_router, prefix="/api/v1")
     app.include_router(assignees_router, prefix="/api/v1")
+    app.include_router(xref_router, prefix="/api/v1")
     app.include_router(watchers_router, prefix="/api/v1")
     app.include_router(me_watching_router, prefix="/api/v1")
 
