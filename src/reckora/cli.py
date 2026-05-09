@@ -21,6 +21,7 @@ from .auth.storage import (
 )
 from .collectors.avatar import AvatarCollector
 from .collectors.breach import BreachCollector
+from .collectors.dns_records import DNSCollector
 from .collectors.email import EmailCollector
 from .collectors.github_api import GitHubCollector
 from .collectors.gravatar import GravatarCollector
@@ -101,6 +102,7 @@ def _build_orchestrator(*, breach_enabled: bool = False) -> Orchestrator:
         GravatarCollector(),
         RedditCollector(),
         WhoisRdapCollector(),
+        DNSCollector(),
         WebProfileCollector(),
         PhoneCollector(),
         EmailCollector(),

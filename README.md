@@ -59,7 +59,7 @@ reckora investigate alice@example.com --breach
 
 Supported `--kind` values: `username`, `email`, `domain`, `url`, `phone`, `wallet` (BTC / ETH / SOL), `avatar` (image URL). Auto-detection covers all of them; pass `--kind` only when the heuristic guesses wrong (e.g. a dotted handle that looks like a domain).
 
-Active collectors (default orchestrator): GitHub, Hacker News, Keybase, Gravatar, WHOIS / RDAP, web profile, phone (offline `phonenumbers`), wallet (Blockstream Esplora / Etherscan / Solana mainnet-beta JSON-RPC), avatar perceptual hash, opt-in HIBP breach.
+Active collectors (default orchestrator): GitHub, Hacker News, Keybase, Gravatar, Reddit, WHOIS / RDAP, DNS records (NS / MX / TXT / SPF / DMARC / DNSSEC via `dnspython`), web profile, phone (offline `phonenumbers`), email, wallet (Blockstream Esplora / Etherscan / Solana mainnet-beta JSON-RPC), avatar perceptual hash, opt-in HIBP breach.
 
 Every dossier — markdown / HTML / JSON / PDF — carries `## Timeline`, `## Anomalies`, an optional `## Cross-trace anchor`, and clickable evidence + Wayback / screenshot links. The same projection is exposed at `GET /api/v1/subjects/{id}` so the frontend can reuse it without re-deriving.
 
