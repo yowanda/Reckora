@@ -188,6 +188,18 @@ CREATE TABLE IF NOT EXISTS subject_comment_mentions(
 
 CREATE INDEX IF NOT EXISTS idx_subject_comment_mentions_user
     ON subject_comment_mentions(mentioned_user_id, created_at, comment_id);
+
+CREATE TABLE IF NOT EXISTS subject_pins(
+    subject_id TEXT NOT NULL
+        REFERENCES subjects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL
+        REFERENCES users(id) ON DELETE CASCADE,
+    pinned_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_subject_pins_user
+    ON subject_pins(user_id, pinned_at, subject_id);
 """
 
 
@@ -762,6 +774,106 @@ class AccessRepository:
             )
             for cid, sid, author_id, body, comment_ts, mention_ts in rows
         ]
+
+    # -- pins (per-actor favourites) -------------------------------------
+
+    def add_pin(
+        self,
+        subject_id: str,
+        user_id: int,
+        *,
+        pinned_at: str,
+    ) -> bool:
+        """Mark ``subject_id`` as pinned for ``user_id``.
+
+        Idempotent — re-pinning is a no-op rather than refreshing the
+        timestamp. The route layer relies on this so a double-tap of
+        the pin button does not silently re-order the favourites
+        list out from under the user.
+        """
+        cur = self._conn.execute(
+            """
+            INSERT OR IGNORE INTO subject_pins(subject_id, user_id, pinned_at)
+            VALUES (?, ?, ?)
+            """,
+            (subject_id, user_id, pinned_at),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def remove_pin(self, subject_id: str, user_id: int) -> bool:
+        """Drop ``user_id``'s pin on ``subject_id``. Idempotent on absent rows."""
+        cur = self._conn.execute(
+            "DELETE FROM subject_pins WHERE subject_id = ? AND user_id = ?",
+            (subject_id, user_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def is_pinned(self, subject_id: str, user_id: int) -> bool:
+        """Cheap existence probe used by route handlers."""
+        row = self._conn.execute(
+            """
+            SELECT 1 FROM subject_pins
+            WHERE subject_id = ? AND user_id = ?
+            """,
+            (subject_id, user_id),
+        ).fetchone()
+        return row is not None
+
+    def list_pinned_summaries(
+        self,
+        user_id: int,
+        *,
+        limit: int = 50,
+    ) -> list[SavedDossierSummary]:
+        """Return ``user_id``'s pinned dossiers, most-recently-pinned first.
+
+        We INNER JOIN against the visibility set rather than just
+        ``subject_pins`` so a pin for a dossier the user has lost
+        access to (e.g. share revoked) is *silently filtered* from
+        the wire output. The pin row itself is left alone so the FE
+        can resurrect the favourite if access is restored.
+        """
+        if limit <= 0:
+            return []
+        rows: list[_VisibleRow] = self._conn.execute(
+            """
+            SELECT
+                s.id,
+                s.seed_kind,
+                s.seed_value,
+                s.identifiers_json,
+                s.created_at,
+                s.summary_md,
+                s.hypotheses_md,
+                COALESCE(
+                    (SELECT COUNT(*) FROM traces t WHERE t.subject_id = s.id), 0
+                ) AS trace_count,
+                COALESCE(
+                    (SELECT COUNT(*) FROM edges e WHERE e.subject_id = s.id), 0
+                ) AS edge_count,
+                COALESCE(
+                    (SELECT COUNT(*) FROM dossier_anchors a WHERE a.subject_id = s.id),
+                    0
+                ) AS anchor_count
+            FROM subjects s
+            JOIN subject_pins p
+              ON p.subject_id = s.id
+             AND p.user_id = :uid
+            WHERE s.id IN (
+                SELECT subject_id FROM subject_owners    WHERE owner_user_id = :uid
+                UNION
+                SELECT subject_id FROM subject_shares    WHERE user_id       = :uid
+                UNION
+                SELECT subject_id FROM subject_assignees WHERE user_id       = :uid
+            )
+            ORDER BY p.pinned_at DESC, p.subject_id DESC
+            LIMIT :limit
+            """,
+            {"uid": user_id, "limit": limit},
+        ).fetchall()
+        return [_row_to_summary(row) for row in rows]
 
     # -- comments ---------------------------------------------------------
 
