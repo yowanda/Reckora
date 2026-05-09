@@ -90,6 +90,18 @@ CREATE TABLE IF NOT EXISTS subject_assignees(
 
 CREATE INDEX IF NOT EXISTS idx_subject_assignees_user
     ON subject_assignees(user_id);
+
+CREATE TABLE IF NOT EXISTS subject_comment_mentions(
+    comment_id INTEGER NOT NULL
+        REFERENCES subject_comments(id) ON DELETE CASCADE,
+    mentioned_user_id INTEGER NOT NULL
+        REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (comment_id, mentioned_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_subject_comment_mentions_user
+    ON subject_comment_mentions(mentioned_user_id, created_at, comment_id);
 """
 
 
@@ -113,6 +125,24 @@ class AssigneeRow:
     user_id: int
     assigned_by: int | None
     assigned_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class MentionRow:
+    """One row in :meth:`AccessRepository.list_mentions_for_user`.
+
+    Joins ``subject_comment_mentions`` against ``subject_comments`` so
+    the route layer has every field the per-actor mentions feed
+    needs: when the mention happened, where it lives, and which
+    user authored the comment.
+    """
+
+    comment_id: int
+    subject_id: str
+    author_user_id: int
+    body: str
+    comment_created_at: str
+    mention_created_at: str
 
 
 class AccessRepository:
@@ -293,6 +323,98 @@ class AccessRepository:
             (subject_id, user_id),
         ).fetchone()
         return row is not None
+
+    # -- mentions ---------------------------------------------------------
+
+    def add_mention(
+        self,
+        comment_id: int,
+        mentioned_user_id: int,
+        *,
+        created_at: str,
+    ) -> bool:
+        """Record that ``comment_id`` mentions ``mentioned_user_id``.
+
+        Idempotent: re-mentioning the same user (e.g. on an edited
+        comment that adds a duplicate ``@username``) is a no-op. The
+        primary key on ``(comment_id, mentioned_user_id)`` collapses
+        the duplicate so the per-actor feed never surfaces the same
+        comment twice.
+        """
+        cur = self._conn.execute(
+            """
+            INSERT OR IGNORE INTO subject_comment_mentions(
+                comment_id, mentioned_user_id, created_at
+            )
+            VALUES (?, ?, ?)
+            """,
+            (comment_id, mentioned_user_id, created_at),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def list_mentions_for_comment(self, comment_id: int) -> list[int]:
+        """Return ``mentioned_user_id`` for every mention on a comment.
+
+        Used by the comments routes to populate the ``mentions``
+        field on the wire response — the route layer joins this
+        against the user table to surface usernames.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT mentioned_user_id FROM subject_comment_mentions
+            WHERE comment_id = ?
+            ORDER BY mentioned_user_id ASC
+            """,
+            (comment_id,),
+        ).fetchall()
+        return [int(uid) for (uid,) in rows]
+
+    def list_mentions_for_user(
+        self,
+        user_id: int,
+        *,
+        limit: int = 50,
+    ) -> list[MentionRow]:
+        """Return the ``user_id``'s mention feed, most-recent first.
+
+        The feed is per-actor and crosses dossiers — a mention from
+        any subject the user can read shows up here. We do *not*
+        filter by current visibility: a mention emitted while the
+        user had access stays in the feed even after their share is
+        revoked. This is the same trade-off comments make for the
+        thread itself.
+        """
+        if limit <= 0:
+            return []
+        rows = self._conn.execute(
+            """
+            SELECT
+                m.comment_id,
+                c.subject_id,
+                c.author_user_id,
+                c.body,
+                c.created_at,
+                m.created_at
+            FROM subject_comment_mentions m
+            JOIN subject_comments c ON c.id = m.comment_id
+            WHERE m.mentioned_user_id = :uid
+            ORDER BY m.created_at DESC, m.comment_id DESC
+            LIMIT :limit
+            """,
+            {"uid": user_id, "limit": limit},
+        ).fetchall()
+        return [
+            MentionRow(
+                comment_id=int(cid),
+                subject_id=str(sid),
+                author_user_id=int(author_id),
+                body=str(body),
+                comment_created_at=str(comment_ts),
+                mention_created_at=str(mention_ts),
+            )
+            for cid, sid, author_id, body, comment_ts, mention_ts in rows
+        ]
 
     # -- comments ---------------------------------------------------------
 

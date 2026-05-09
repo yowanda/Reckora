@@ -27,6 +27,12 @@ class CommentEntry(BaseModel):
     deleted from the user table — the row is preserved (not cascade-
     deleted) so the thread keeps its narrative continuity, but the
     frontend can render the row as "deleted user".
+
+    ``mentions`` carries the list of resolved usernames from any
+    ``@username`` tokens in the body — deduped, sorted alphabetically
+    for stable rendering, and limited to users who could read the
+    dossier when the comment fired. Unresolved tokens (typos, foreign
+    handles) are dropped silently rather than surfaced.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -37,6 +43,7 @@ class CommentEntry(BaseModel):
     body: str
     created_at: datetime
     updated_at: datetime | None = None
+    mentions: list[str] = []
 
 
 class AssigneeCreate(BaseModel):
