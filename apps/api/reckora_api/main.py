@@ -42,6 +42,7 @@ from reckora_api.dossier_status.routes import (
     status_router,
 )
 from reckora_api.investigations.routes import router as investigations_router
+from reckora_api.xref.routes import router as xref_router
 
 
 def _default_orchestrator_factory() -> Orchestrator:
@@ -114,6 +115,7 @@ def create_app(
     app.include_router(sharing_router, prefix="/api/v1")
     app.include_router(comments_router, prefix="/api/v1")
     app.include_router(assignees_router, prefix="/api/v1")
+    app.include_router(xref_router, prefix="/api/v1")
     app.include_router(status_router, prefix="/api/v1")
     app.include_router(status_catalog_router, prefix="/api/v1")
 
