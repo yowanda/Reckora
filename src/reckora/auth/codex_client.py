@@ -1,28 +1,85 @@
 """Thin async client for the ChatGPT Codex Responses API.
 
-Why a hand-rolled httpx client instead of the ``openai`` SDK?
+Two entry points:
 
-The Codex backend (``chatgpt.com/backend-api/codex/responses``)
-*requires* streaming responses — non-streaming requests are rejected.
-That requirement, plus a couple of small payload-shape divergences
-from the upstream Responses API, mean we'd be monkey-patching the SDK
-to make it work (which is exactly what ``codex-auth`` on PyPI does).
+* ``complete_via_codex`` — single text completion, returns the
+  concatenated assistant text. Used by the legacy passive AI path
+  (summarize / hypothesize) and by the AgentLoop's planner step.
+* ``complete_with_tools_via_codex`` — multi-turn tool-call helper.
+  Accepts the full Responses-API ``input`` array (so the caller can
+  carry prior ``function_call`` / ``function_call_output`` items
+  forward across turns) and a list of function-tool definitions.
+  Returns both the assistant text *and* any ``function_call`` items
+  the model emitted, so the caller can dispatch them and feed the
+  results back on the next turn.
 
-A 50-line httpx wrapper is lighter, keeps the divergences localised
-and — importantly — makes the request shape *testable* end-to-end
-with ``pytest-httpx``. The reasoning layer treats this as a black box
-that maps ``(system, user) → assistant text`` just like the
-API-key code path.
+Wire shape (via streaming SSE):
+
+* ``response.output_text.delta`` events accumulate assistant text.
+* ``response.output_item.done`` events with ``item.type=function_call``
+  surface a tool call (``call_id``, ``name``, ``arguments`` is a
+  JSON-encoded string).
+* ``response.completed`` is the final event; we use it as a fallback
+  for assistants that batch the full text instead of streaming
+  deltas.
+
+This mirrors the wire format documented at
+https://platform.openai.com/docs/guides/function-calling?api-mode=responses
+and the open-source ``codex-rs`` client.
+
+Why a hand-rolled httpx client instead of the ``openai`` SDK? The
+Codex backend (``chatgpt.com/backend-api/codex/responses``) *requires*
+streaming responses — non-streaming requests are rejected. That
+requirement, plus a couple of small payload-shape divergences from the
+upstream Responses API, mean we'd be monkey-patching the SDK to make
+it work (which is exactly what ``codex-auth`` on PyPI does). A
+hand-rolled httpx wrapper is lighter, keeps the divergences localised,
+and makes the request shape *testable* end-to-end with ``pytest-httpx``.
+The reasoning layer treats this as a black box that maps
+``(system, user) → assistant text`` (or, for tool calls, a stream of
+function calls + final text) just like the API-key code path.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 
 from .oauth import CHATGPT_CODEX_BASE_URL
+
+
+@dataclass(frozen=True)
+class CodexFunctionCall:
+    """A single ``function_call`` item returned by the Responses API.
+
+    ``arguments`` is the raw JSON-encoded string the model emitted —
+    callers parse it themselves (matches both the chat-completions
+    ``function.arguments`` and Responses ``function_call.arguments``
+    contracts; both are strings).
+    """
+
+    call_id: str
+    name: str
+    arguments: str
+
+
+@dataclass(frozen=True)
+class CodexResponsesTurn:
+    """One assistant turn from the Codex Responses API.
+
+    Either the model returned plain text (``content`` populated,
+    ``function_calls`` empty) or it requested one or more function
+    calls (``function_calls`` populated; ``content`` may also have
+    a "thinking-out-loud" preface).
+    """
+
+    content: str
+    function_calls: tuple[CodexFunctionCall, ...] = field(default_factory=tuple)
+
 
 # Body schema for the Codex Responses API. Matches what the OpenAI
 # Codex CLI sends, observed via the ``openai-oauth`` npm package and
@@ -106,6 +163,87 @@ async def complete_via_codex(
     if completed_text is not None:
         return completed_text
     return ""
+
+
+async def complete_with_tools_via_codex(
+    *,
+    model: str,
+    instructions: str,
+    input_items: Sequence[dict[str, Any]],
+    tools: Sequence[dict[str, Any]],
+    access_token: str,
+    client: httpx.AsyncClient,
+    base_url: str = CHATGPT_CODEX_BASE_URL,
+    tool_choice: str = "auto",
+    parallel_tool_calls: bool = False,
+) -> CodexResponsesTurn:
+    """Run a single Responses-API call with function tools.
+
+    The caller is responsible for managing the conversation: appending
+    its own ``message`` items as the user, the previous turn's
+    ``function_call`` items, and ``function_call_output`` items
+    carrying the tool results, then re-calling this helper. The shape
+    of ``input_items`` and ``tools`` is the Responses-API native
+    format (no chat-completions ``function`` wrapper).
+
+    Returns a :class:`CodexResponsesTurn` containing whatever
+    text + function calls the model emitted. The helper does *not*
+    loop — that's the orchestrator's job upstream so it can enforce
+    a budget and materialise traces between turns.
+    """
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+    body: dict[str, Any] = {
+        "model": model,
+        "instructions": instructions,
+        "input": list(input_items),
+        "tools": list(tools),
+        "tool_choice": tool_choice,
+        "parallel_tool_calls": parallel_tool_calls,
+        "stream": True,
+        "store": False,
+    }
+
+    text_chunks: list[str] = []
+    completed_text: str | None = None
+    function_calls: list[CodexFunctionCall] = []
+    completed_calls: list[CodexFunctionCall] = []
+    async with client.stream(
+        "POST",
+        f"{base_url}/responses",
+        json=body,
+        headers=headers,
+    ) as resp:
+        resp.raise_for_status()
+        async for event in _iter_sse_events(resp.aiter_lines()):
+            event_type = event.get("type")
+            if event_type == "response.output_text.delta":
+                delta = event.get("delta")
+                if isinstance(delta, str):
+                    text_chunks.append(delta)
+            elif event_type == "response.output_item.done":
+                call = _extract_function_call_item(event)
+                if call is not None:
+                    function_calls.append(call)
+            elif event_type == "response.completed":
+                completed_text = _extract_completed_text(event)
+                completed_calls = _extract_completed_function_calls(event)
+            elif event_type == "error":
+                msg = event.get("message") or event.get("error") or "stream error"
+                raise CodexStreamError(str(msg))
+
+    # Prefer per-item ``output_item.done`` signals (they fire as soon
+    # as each call is finalised) but fall back to the ``completed``
+    # event's full output array for servers that don't emit them.
+    final_calls = function_calls or completed_calls
+    text = "".join(text_chunks) or completed_text or ""
+    return CodexResponsesTurn(
+        content=text,
+        function_calls=tuple(final_calls),
+    )
 
 
 class CodexStreamError(RuntimeError):
@@ -192,3 +330,56 @@ def _extract_completed_text(event: dict[str, object]) -> str | None:
                 if isinstance(text, str):
                     pieces.append(text)
     return "".join(pieces) if pieces else None
+
+
+def _extract_function_call_item(event: dict[str, object]) -> CodexFunctionCall | None:
+    """Return the ``function_call`` payload inside a ``response.output_item.done``.
+
+    The Responses API emits ``output_item.done`` once per finalised
+    output item. For function calls, the item shape is:
+
+      {"type": "function_call", "call_id": "...", "name": "...",
+       "arguments": "{json-string}"}
+    """
+    item = event.get("item")
+    if not isinstance(item, dict):
+        return None
+    if item.get("type") != "function_call":
+        return None
+    call_id = item.get("call_id")
+    name = item.get("name")
+    arguments = item.get("arguments")
+    if not isinstance(call_id, str) or not isinstance(name, str):
+        return None
+    if not isinstance(arguments, str):
+        return None
+    return CodexFunctionCall(call_id=call_id, name=name, arguments=arguments)
+
+
+def _extract_completed_function_calls(
+    event: dict[str, object],
+) -> list[CodexFunctionCall]:
+    """Pull every ``function_call`` item out of a ``response.completed`` event.
+
+    Used as a fallback when the upstream batches output items into the
+    final completion payload instead of emitting per-item ``done``
+    events.
+    """
+    response = event.get("response")
+    if not isinstance(response, dict):
+        return []
+    output = response.get("output")
+    if not isinstance(output, list):
+        return []
+    calls: list[CodexFunctionCall] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "function_call":
+            continue
+        call_id = item.get("call_id")
+        name = item.get("name")
+        arguments = item.get("arguments")
+        if isinstance(call_id, str) and isinstance(name, str) and isinstance(arguments, str):
+            calls.append(CodexFunctionCall(call_id=call_id, name=name, arguments=arguments))
+    return calls

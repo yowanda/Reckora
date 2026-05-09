@@ -52,7 +52,7 @@ const TOGGLES: Array<{
     label: "ai agent",
     key: "ai_agent",
     description:
-      "Recursive AgentLoop: LLM proposes follow-ups + can call web_search / fetch_url. Implies ai. Requires OPENAI_API_KEY.",
+      "Recursive AgentLoop: LLM proposes follow-ups + can call web_search / fetch_url. Implies ai. Works on both OPENAI_API_KEY and ChatGPT OAuth.",
   },
   {
     label: "breach",

@@ -294,11 +294,12 @@ async def _run(
                 # to gather evidence the rule-based collectors missed.
                 researcher: Researcher | None = None
                 if ai_tools:
-                    if not settings.openai_api_key:
-                        raise typer.BadParameter(
-                            "--ai-tools requires OPENAI_API_KEY (ChatGPT "
-                            "OAuth tool calls are not currently supported)."
-                        )
+                    # Both OPENAI_API_KEY and ChatGPT OAuth drive
+                    # function calling now (the latter via the Codex
+                    # Responses API). ReasoningClient resolves
+                    # credentials lazily and the AgentLoop disables
+                    # the researcher gracefully if neither is
+                    # configured.
                     researcher = Researcher.with_default_tools(
                         client=client,
                         seed=seed,

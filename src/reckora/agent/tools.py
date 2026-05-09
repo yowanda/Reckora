@@ -65,7 +65,7 @@ class ToolSpec:
     handler: Callable[[dict[str, Any]], Awaitable[ToolResult]]
 
     def to_openai(self) -> dict[str, Any]:
-        """Render the spec as an OpenAI ``tools=[...]`` entry."""
+        """Render the spec as an OpenAI Chat-Completions ``tools=[...]`` entry."""
         return {
             "type": "function",
             "function": {
@@ -73,6 +73,20 @@ class ToolSpec:
                 "description": self.description,
                 "parameters": self.schema,
             },
+        }
+
+    def to_responses(self) -> dict[str, Any]:
+        """Render the spec as an OpenAI Responses-API ``tools=[...]`` entry.
+
+        The Responses API (used by the ChatGPT Codex backend that
+        OAuth authentication targets) flattens the function definition
+        — there is no nested ``function`` wrapper.
+        """
+        return {
+            "type": "function",
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.schema,
         }
 
 

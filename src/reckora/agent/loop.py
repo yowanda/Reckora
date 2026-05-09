@@ -313,8 +313,8 @@ class AgentLoop:
             )
         except ToolsNotSupportedError:
             log.info(
-                "agent researcher disabled for this run: tool calls "
-                "require an OPENAI_API_KEY auth path"
+                "agent researcher disabled for this run: no usable LLM "
+                "credentials (set OPENAI_API_KEY or run `reckora auth login`)"
             )
             self._researcher_disabled = True
             return ToolRunSummary()

@@ -54,7 +54,9 @@ class InvestigationRequest(BaseModel):
         description=(
             "When ai_iterations >= 1, allow the AgentLoop's LLM to call "
             "web_search and fetch_url so it can gather evidence beyond "
-            "what the rule-based collectors found. Requires OPENAI_API_KEY."
+            "what the rule-based collectors found. Works under both "
+            "OPENAI_API_KEY (chat-completions function calling) and "
+            "ChatGPT OAuth (Responses-API function calling)."
         ),
     )
     ai_tool_calls: int = Field(
