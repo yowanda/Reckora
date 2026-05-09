@@ -214,6 +214,18 @@ CREATE TABLE IF NOT EXISTS subject_notes(
 
 CREATE INDEX IF NOT EXISTS idx_subject_notes_user
     ON subject_notes(user_id, updated_at, subject_id);
+
+CREATE TABLE IF NOT EXISTS subject_visits(
+    subject_id TEXT NOT NULL
+        REFERENCES subjects(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL
+        REFERENCES users(id) ON DELETE CASCADE,
+    last_seen_at TEXT NOT NULL,
+    PRIMARY KEY (subject_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_subject_visits_user
+    ON subject_visits(user_id, last_seen_at, subject_id);
 """
 
 
@@ -980,6 +992,83 @@ class AccessRepository:
         )
         self._conn.commit()
         return cur.rowcount > 0
+
+    # -- per-actor visit stamps ------------------------------------------
+
+    def mark_visited(
+        self,
+        subject_id: str,
+        user_id: int,
+        *,
+        now: str,
+    ) -> str:
+        """Stamp ``user_id``'s last-seen marker on ``subject_id`` to ``now``.
+
+        The stamp always advances on write — a second POST in the
+        same wall-clock second is harmless (both bumps land on the
+        same value), but a stale stamp is never preserved.
+        """
+        self._conn.execute(
+            """
+            INSERT INTO subject_visits(subject_id, user_id, last_seen_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT (subject_id, user_id) DO UPDATE SET
+                last_seen_at = excluded.last_seen_at
+            """,
+            (subject_id, user_id, now),
+        )
+        self._conn.commit()
+        return now
+
+    def get_last_visit(
+        self,
+        subject_id: str,
+        user_id: int,
+    ) -> str | None:
+        """Return the actor's last-seen ISO timestamp, or ``None``."""
+        row = self._conn.execute(
+            """
+            SELECT last_seen_at FROM subject_visits
+            WHERE subject_id = ? AND user_id = ?
+            """,
+            (subject_id, user_id),
+        ).fetchone()
+        return None if row is None else str(row[0])
+
+    def count_unread_comments(
+        self,
+        subject_id: str,
+        user_id: int,
+    ) -> int:
+        """Count comments on ``subject_id`` newer than ``user_id``'s visit.
+
+        Semantics:
+
+        * Never visited → *every* comment counts as unread, so a
+          freshly-shared collaborator sees a non-zero badge that
+          motivates them to open the dossier.
+        * Visited → only comments strictly newer than the stamp
+          are counted. Comments authored by the actor themselves
+          are *not* excluded — a comment posted at T+1 shows up as
+          "unread" until the actor next visits, which mirrors how
+          chat clients badge your own messages until you scroll
+          past them.
+        """
+        last_seen = self.get_last_visit(subject_id, user_id)
+        if last_seen is None:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM subject_comments WHERE subject_id = ?",
+                (subject_id,),
+            ).fetchone()
+        else:
+            row = self._conn.execute(
+                """
+                SELECT COUNT(*) FROM subject_comments
+                WHERE subject_id = ? AND created_at > ?
+                """,
+                (subject_id, last_seen),
+            ).fetchone()
+        return int(row[0]) if row is not None else 0
 
     # -- comments ---------------------------------------------------------
 
