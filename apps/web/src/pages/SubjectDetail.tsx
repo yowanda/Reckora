@@ -122,58 +122,74 @@ export function SubjectDetailPage() {
   const seed = subject.data ? extractSeed(subject.data) : null;
 
   return (
-    <section className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
-      <div className="space-y-4">
-        <header className="space-y-3 rounded border border-border bg-bg-panel p-4">
-          {subject.isPending ? <Spinner /> : null}
-          {subject.error ? <ErrorMessage error={subject.error} /> : null}
-          {subject.data ? (
-            <>
-              <div className="flex flex-wrap items-baseline gap-2">
-                <h1 className="text-lg font-semibold">
-                  <span className="rounded bg-bg-subtle px-1.5 py-0.5 font-mono text-xs text-zinc-400">
+    <section className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="space-y-5">
+        <header className="overflow-hidden rounded-lg border border-ink-line bg-ink-panel">
+          <div className="border-b border-ink-line bg-ink-subtle/40 px-4 py-2 text-2xs font-medium uppercase tracking-[0.2em] text-fg-dim">
+            Dossier
+          </div>
+          <div className="space-y-3 p-4">
+            {subject.isPending ? <Spinner label="Loading dossier…" /> : null}
+            {subject.error ? <ErrorMessage error={subject.error} /> : null}
+            {subject.data ? (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded border border-accent/30 bg-accent-soft px-1.5 py-0.5 font-mono text-2xs uppercase tracking-[0.12em] text-accent">
                     {seed?.kind ?? "subject"}
-                  </span>{" "}
-                  <span>{seed?.value ?? "(unknown seed)"}</span>
-                </h1>
-                <span className="font-mono text-xs text-zinc-500">
-                  {shortId(subject.data.id, 12)}
-                </span>
-                <span className="text-xs text-zinc-500">
-                  · created {formatRelativeTime(subject.data.created_at)}
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <StatusPicker subjectId={subjectId} />
-                <WatchToggle subjectId={subjectId} />
-                <PinToggle subjectId={subjectId} />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (
-                      confirm("Delete this subject? This cannot be undone.")
-                    ) {
-                      remove.mutate(subjectId);
-                    }
-                  }}
-                  className="ml-auto rounded border border-red-900/60 bg-red-950/30 px-2 py-1 text-xs text-red-200 hover:bg-red-900/40"
-                >
-                  Delete
-                </button>
-              </div>
-              <LabelChips subjectId={subjectId} />
-            </>
-          ) : null}
+                  </span>
+                  <h1 className="text-xl font-semibold tracking-snug text-fg">
+                    {seed?.value ?? "(unknown seed)"}
+                  </h1>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-fg-dim">
+                  <span className="font-mono uppercase tracking-[0.08em]">
+                    {shortId(subject.data.id, 12)}
+                  </span>
+                  <span>·</span>
+                  <span>created {formatRelativeTime(subject.data.created_at)}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusPicker subjectId={subjectId} />
+                  <WatchToggle subjectId={subjectId} />
+                  <PinToggle subjectId={subjectId} />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (
+                        confirm("Delete this subject? This cannot be undone.")
+                      ) {
+                        remove.mutate(subjectId);
+                      }
+                    }}
+                    className="ml-auto rounded border border-danger/40 bg-danger-soft px-2 py-1 text-xs text-danger transition-colors hover:border-danger hover:bg-danger/20"
+                  >
+                    Delete
+                  </button>
+                </div>
+                <LabelChips subjectId={subjectId} />
+              </>
+            ) : null}
+          </div>
         </header>
 
-        <article className="rounded border border-border bg-bg-panel p-4">
-          {dossier.isPending ? <Spinner label="Rendering dossier…" /> : null}
-          {dossier.error ? <ErrorMessage error={dossier.error} /> : null}
-          {dossier.data ? (
-            <div className="prose prose-invert prose-sm max-w-none">
-              <ReactMarkdown>{dossier.data}</ReactMarkdown>
-            </div>
-          ) : null}
+        <article className="overflow-hidden rounded-lg border border-ink-line bg-ink-panel">
+          <div className="flex items-center justify-between border-b border-ink-line bg-ink-subtle/40 px-4 py-2 text-2xs font-medium uppercase tracking-[0.2em] text-fg-dim">
+            <span>Findings</span>
+            {dossier.data ? (
+              <span className="font-mono normal-case tracking-normal text-fg-dim">
+                {dossier.data.length.toLocaleString()} chars
+              </span>
+            ) : null}
+          </div>
+          <div className="p-4">
+            {dossier.isPending ? <Spinner label="Rendering dossier…" /> : null}
+            {dossier.error ? <ErrorMessage error={dossier.error} /> : null}
+            {dossier.data ? (
+              <div className="prose prose-invert prose-sm max-w-none">
+                <ReactMarkdown>{dossier.data}</ReactMarkdown>
+              </div>
+            ) : null}
+          </div>
         </article>
 
         <Comments subjectId={subjectId} />

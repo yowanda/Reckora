@@ -92,8 +92,8 @@ export function Todos({ subjectId }: { subjectId: string }) {
   const [draft, setDraft] = useState("");
 
   return (
-    <section className="rounded border border-border bg-bg-panel">
-      <header className="border-b border-border px-3 py-2 text-xs uppercase tracking-wide text-zinc-500">
+    <section className="rounded border border-ink-line bg-ink-panel">
+      <header className="border-b border-ink-line px-3 py-2 text-xs uppercase tracking-wide text-fg-dim">
         Todo
       </header>
       <div className="space-y-2 p-3">
@@ -111,7 +111,7 @@ export function Todos({ subjectId }: { subjectId: string }) {
                   })
                 }
               />
-              <span className={todo.done ? "line-through text-zinc-500" : ""}>
+              <span className={todo.done ? "line-through text-fg-dim" : ""}>
                 {todo.body}
               </span>
               <button
@@ -119,14 +119,14 @@ export function Todos({ subjectId }: { subjectId: string }) {
                 onClick={() =>
                   remove.mutate({ subjectId, todoId: todo.id })
                 }
-                className="ml-auto text-xs text-zinc-500 hover:text-red-300"
+                className="ml-auto text-xs text-fg-dim hover:text-danger"
               >
                 ×
               </button>
             </li>
           ))}
           {(list.data ?? []).length === 0 ? (
-            <li className="text-xs text-zinc-500">No tasks.</li>
+            <li className="text-xs text-fg-dim">No tasks.</li>
           ) : null}
         </ul>
         <form
@@ -145,7 +145,7 @@ export function Todos({ subjectId }: { subjectId: string }) {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="add task"
-            className="flex-1 rounded border border-border bg-bg-subtle px-2 py-1 text-xs"
+            className="flex-1 rounded border border-ink-line bg-ink-subtle px-2 py-1 text-xs"
           />
           <button
             type="submit"

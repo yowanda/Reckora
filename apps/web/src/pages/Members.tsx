@@ -111,15 +111,22 @@ export function MembersPage() {
   return (
     <section className="space-y-6">
       <header>
-        <h1 className="text-xl font-semibold">Members</h1>
-        <p className="text-sm text-zinc-500">
+        <div className="text-2xs font-medium uppercase tracking-[0.22em] text-fg-dim">
+          Admin
+        </div>
+        <h1 className="mt-1 text-2xl font-semibold tracking-snug text-fg">
+          Members
+        </h1>
+        <p className="mt-1 text-sm text-fg-muted">
           Operators and investigators who can sign in to this Reckora instance.
         </p>
       </header>
 
       <div className="grid gap-6 md:grid-cols-[1fr_320px]">
         <div className="space-y-3">
-          <h2 className="text-sm font-medium text-zinc-300">Existing accounts</h2>
+          <h2 className="text-2xs font-medium uppercase tracking-[0.18em] text-fg-dim">
+            Existing accounts
+          </h2>
           {usersQuery.isPending ? <SkeletonList count={3} /> : null}
           {usersQuery.error ? <ErrorMessage error={usersQuery.error} /> : null}
           {usersQuery.data && usersQuery.data.length === 0 ? (
@@ -130,7 +137,7 @@ export function MembersPage() {
             />
           ) : null}
           {usersQuery.data ? (
-            <ul className="divide-y divide-border rounded border border-border bg-bg-panel">
+            <ul className="divide-y divide-ink-line overflow-hidden rounded-lg border border-ink-line bg-ink-panel">
               {usersQuery.data.map((u) => {
                 const isSelf = u.id === state.user.id;
                 const isAdmin = u.role === "admin";
@@ -139,25 +146,32 @@ export function MembersPage() {
                     key={u.id}
                     className="flex flex-wrap items-center gap-3 px-4 py-3"
                   >
+                    <span
+                      className={[
+                        "mt-1 inline-block h-2 w-2 shrink-0 rounded-full",
+                        isAdmin ? "bg-alert" : "bg-ok",
+                      ].join(" ")}
+                      aria-hidden
+                    />
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="truncate font-medium">{u.username}</span>
+                      <div className="flex flex-wrap items-center gap-2 text-sm">
+                        <span className="truncate font-medium text-fg">
+                          {u.username}
+                        </span>
                         <span
-                          className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide ${
+                          className={`rounded border px-1.5 py-0.5 font-mono text-2xs uppercase tracking-[0.12em] ${
                             isAdmin
-                              ? "bg-amber-500/15 text-amber-300 border border-amber-500/30"
-                              : "bg-bg-subtle text-zinc-400 border border-border"
+                              ? "border-alert/30 bg-alert-soft text-alert"
+                              : "border-ink-line bg-ink-subtle text-fg-muted"
                           }`}
                         >
                           {u.role}
                         </span>
                         {isSelf ? (
-                          <span className="text-[10px] uppercase tracking-wide text-zinc-500">
-                            you
-                          </span>
+                          <span className="rk-kbd">you</span>
                         ) : null}
                       </div>
-                      <div className="mt-1 text-xs text-zinc-500">
+                      <div className="mt-1 text-2xs text-fg-dim">
                         joined {formatRelativeTime(u.created_at)}
                       </div>
                     </div>
@@ -171,9 +185,9 @@ export function MembersPage() {
                           })
                         }
                         disabled={promoteMut.isPending}
-                        className="rounded border border-border bg-bg-subtle px-2 py-1 text-xs text-zinc-300 hover:text-zinc-100 disabled:opacity-50"
+                        className="rounded border border-ink-line bg-ink-subtle px-2 py-1 text-2xs uppercase tracking-[0.16em] text-fg-muted transition-colors hover:border-accent/40 hover:text-fg disabled:opacity-50"
                       >
-                        {isAdmin ? "Demote to viewer" : "Promote to admin"}
+                        {isAdmin ? "Demote" : "Promote"}
                       </button>
                     )}
                   </li>
@@ -185,64 +199,74 @@ export function MembersPage() {
 
         <form
           onSubmit={onSubmit}
-          className="space-y-3 rounded border border-border bg-bg-panel p-4"
+          className="overflow-hidden rounded-lg border border-ink-line bg-ink-panel"
         >
-          <h2 className="text-sm font-medium text-zinc-300">Add a member</h2>
-          <p className="text-xs text-zinc-500">
-            Provisioned accounts can sign in immediately. Members default to viewer
-            role.
-          </p>
-          <label className="block text-xs">
-            <span className="mb-1 block text-zinc-400">Username</span>
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              autoComplete="off"
-              minLength={3}
-              maxLength={64}
-              pattern="[A-Za-z0-9_-]+"
-              className="w-full rounded border border-border bg-bg-subtle px-2 py-1.5 text-sm outline-none focus:border-accent"
-            />
-          </label>
-          <label className="block text-xs">
-            <span className="mb-1 block text-zinc-400">Initial password</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={8}
-              autoComplete="new-password"
-              className="w-full rounded border border-border bg-bg-subtle px-2 py-1.5 text-sm outline-none focus:border-accent"
-            />
-            <span className="mt-1 block text-[11px] text-zinc-500">
-              At least 8 characters. Share with the member out-of-band.
-            </span>
-          </label>
-          <label className="block text-xs">
-            <span className="mb-1 block text-zinc-400">Role</span>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value as Role)}
-              className="w-full rounded border border-border bg-bg-subtle px-2 py-1.5 text-sm outline-none focus:border-accent"
-            >
-              <option value="viewer">Viewer (member)</option>
-              <option value="admin">Admin (full access)</option>
-            </select>
-          </label>
-          {formError ? (
-            <p className="rounded border border-red-500/40 bg-red-500/10 px-2 py-1.5 text-xs text-red-300">
-              {formError}
+          <div className="border-b border-ink-line bg-ink-subtle/40 px-4 py-2 text-2xs font-medium uppercase tracking-[0.2em] text-fg-dim">
+            Add a member
+          </div>
+          <div className="space-y-3 p-4">
+            <p className="text-2xs text-fg-dim">
+              Provisioned accounts can sign in immediately. Members default to
+              viewer role.
             </p>
-          ) : null}
-          <button
-            type="submit"
-            disabled={createMut.isPending}
-            className="w-full rounded bg-accent-muted px-3 py-2 text-sm font-medium text-zinc-100 hover:bg-accent disabled:opacity-50"
-          >
-            {createMut.isPending ? <Spinner label="Creating…" /> : "Add member"}
-          </button>
+            <label className="block">
+              <span className="mb-1 block text-2xs font-medium uppercase tracking-[0.18em] text-fg-dim">
+                Username
+              </span>
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                autoComplete="off"
+                minLength={3}
+                maxLength={64}
+                pattern="[A-Za-z0-9_-]+"
+                className="w-full rounded border border-ink-line bg-ink/40 px-2.5 py-1.5 text-sm font-mono text-fg outline-none transition-colors focus:border-accent focus:shadow-ring"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-2xs font-medium uppercase tracking-[0.18em] text-fg-dim">
+                Initial password
+              </span>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={8}
+                autoComplete="new-password"
+                className="w-full rounded border border-ink-line bg-ink/40 px-2.5 py-1.5 text-sm font-mono text-fg outline-none transition-colors focus:border-accent focus:shadow-ring"
+              />
+              <span className="mt-1 block text-2xs text-fg-dim">
+                At least 8 characters. Share with the member out-of-band.
+              </span>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-2xs font-medium uppercase tracking-[0.18em] text-fg-dim">
+                Role
+              </span>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value as Role)}
+                className="w-full rounded border border-ink-line bg-ink/40 px-2.5 py-1.5 text-sm font-mono text-fg outline-none transition-colors focus:border-accent focus:shadow-ring"
+              >
+                <option value="viewer">Viewer (member)</option>
+                <option value="admin">Admin (full access)</option>
+              </select>
+            </label>
+            {formError ? (
+              <p className="rounded border border-danger/40 bg-danger-soft px-2 py-1.5 text-xs text-danger">
+                {formError}
+              </p>
+            ) : null}
+            <button
+              type="submit"
+              disabled={createMut.isPending}
+              className="w-full rounded border border-accent/40 bg-accent-muted px-3 py-2 text-sm font-medium text-fg transition-colors hover:border-accent hover:bg-accent/30 disabled:opacity-50"
+            >
+              {createMut.isPending ? <Spinner label="Creating…" /> : "Add member"}
+            </button>
+          </div>
         </form>
       </div>
     </section>

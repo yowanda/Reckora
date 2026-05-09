@@ -74,13 +74,13 @@ export function Assignees({ subjectId }: { subjectId: string }) {
   const [draft, setDraft] = useState("");
 
   return (
-    <section className="rounded border border-border bg-bg-panel">
-      <header className="border-b border-border px-3 py-2 text-xs uppercase tracking-wide text-zinc-500">
+    <section className="rounded border border-ink-line bg-ink-panel">
+      <header className="border-b border-ink-line px-3 py-2 text-xs uppercase tracking-wide text-fg-dim">
         Assignees
       </header>
       <div className="space-y-2 p-3">
         {(list.data ?? []).length === 0 ? (
-          <p className="text-xs text-zinc-500">Nobody is assigned yet.</p>
+          <p className="text-xs text-fg-dim">Nobody is assigned yet.</p>
         ) : (
           <ul className="space-y-1 text-sm">
             {(list.data ?? []).map((a) => (
@@ -91,7 +91,7 @@ export function Assignees({ subjectId }: { subjectId: string }) {
                   onClick={() =>
                     remove.mutate({ subjectId, username: a.username })
                   }
-                  className="ml-auto text-xs text-zinc-500 hover:text-red-300"
+                  className="ml-auto text-xs text-fg-dim hover:text-danger"
                 >
                   remove
                 </button>
@@ -115,7 +115,7 @@ export function Assignees({ subjectId }: { subjectId: string }) {
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="username"
-            className="flex-1 rounded border border-border bg-bg-subtle px-2 py-1 text-xs"
+            className="flex-1 rounded border border-ink-line bg-ink-subtle px-2 py-1 text-xs"
           />
           <button
             type="submit"

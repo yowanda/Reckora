@@ -156,15 +156,15 @@ export function Comments({ subjectId }: { subjectId: string }) {
   }
 
   return (
-    <section className="rounded border border-border bg-bg-panel">
-      <header className="border-b border-border px-3 py-2 text-xs uppercase tracking-wide text-zinc-500">
+    <section className="rounded border border-ink-line bg-ink-panel">
+      <header className="border-b border-ink-line px-3 py-2 text-xs uppercase tracking-wide text-fg-dim">
         Comments
       </header>
       <div className="space-y-3 p-3">
         {list.isPending ? <Spinner /> : null}
         {list.error ? <ErrorMessage error={list.error} /> : null}
         {top.length === 0 && !list.isPending ? (
-          <p className="text-xs text-zinc-500">No comments yet.</p>
+          <p className="text-xs text-fg-dim">No comments yet.</p>
         ) : null}
         <ul className="space-y-3">
           {top.map((comment) => (
@@ -192,7 +192,7 @@ export function Comments({ subjectId }: { subjectId: string }) {
             onChange={(e) => setDraft(e.target.value)}
             rows={2}
             placeholder="Write a comment… use @username to mention."
-            className="w-full rounded border border-border bg-bg-subtle px-2 py-1.5 text-sm outline-none focus:border-accent"
+            className="w-full rounded border border-ink-line bg-ink-subtle px-2 py-1.5 text-sm outline-none focus:border-accent"
           />
           {post.error ? <ErrorMessage error={post.error} /> : null}
           <div className="flex justify-end">
@@ -227,33 +227,33 @@ function CommentNode({
   const [draft, setDraft] = useState("");
 
   return (
-    <li className="rounded border border-border bg-bg-subtle p-3">
-      <div className="flex items-baseline gap-2 text-xs text-zinc-500">
-        <span className="font-medium text-zinc-200">
+    <li className="rounded border border-ink-line bg-ink-subtle p-3">
+      <div className="flex items-baseline gap-2 text-xs text-fg-dim">
+        <span className="font-medium text-fg">
           {comment.author_username ?? `user ${comment.author_user_id}`}
         </span>
         <span>{formatRelativeTime(comment.created_at)}</span>
         <button
           type="button"
           onClick={onDelete}
-          className="ml-auto text-zinc-500 hover:text-red-300"
+          className="ml-auto text-fg-dim hover:text-danger"
         >
           delete
         </button>
       </div>
       <p className="mt-1 whitespace-pre-wrap text-sm">{comment.body}</p>
       {comment.mentions && comment.mentions.length > 0 ? (
-        <p className="mt-1 text-xs text-zinc-500">
+        <p className="mt-1 text-xs text-fg-dim">
           mentioned: {comment.mentions.map((u) => `@${u}`).join(", ")}
         </p>
       ) : null}
       <ReactionsRow subjectId={subjectId} commentId={comment.id} />
       {replies.length > 0 ? (
-        <ul className="mt-2 space-y-2 border-l border-border pl-3">
+        <ul className="mt-2 space-y-2 border-l border-ink-line pl-3">
           {replies.map((reply) => (
-            <li key={reply.id} className="rounded bg-bg-panel p-2">
-              <div className="flex items-baseline gap-2 text-xs text-zinc-500">
-                <span className="font-medium text-zinc-200">
+            <li key={reply.id} className="rounded bg-ink-panel p-2">
+              <div className="flex items-baseline gap-2 text-xs text-fg-dim">
+                <span className="font-medium text-fg">
                   {reply.author_username ?? `user ${reply.author_user_id}`}
                 </span>
                 <span>{formatRelativeTime(reply.created_at)}</span>
@@ -280,7 +280,7 @@ function CommentNode({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             rows={2}
-            className="w-full rounded border border-border bg-bg-panel px-2 py-1 text-sm outline-none focus:border-accent"
+            className="w-full rounded border border-ink-line bg-ink-panel px-2 py-1 text-sm outline-none focus:border-accent"
           />
           <div className="flex gap-2">
             <button
@@ -292,7 +292,7 @@ function CommentNode({
             <button
               type="button"
               onClick={() => setReplying(false)}
-              className="rounded border border-border bg-bg-panel px-2 py-1 text-xs"
+              className="rounded border border-ink-line bg-ink-panel px-2 py-1 text-xs"
             >
               Cancel
             </button>
@@ -302,7 +302,7 @@ function CommentNode({
         <button
           type="button"
           onClick={() => setReplying(true)}
-          className="mt-2 text-xs text-zinc-400 hover:text-zinc-100"
+          className="mt-2 text-xs text-fg-muted hover:text-fg"
         >
           Reply
         </button>
@@ -357,7 +357,7 @@ function ReactionsRow({
             className={`rounded border px-1.5 py-0.5 text-xs ${
               mine
                 ? "border-accent bg-accent-muted"
-                : "border-border bg-bg-panel hover:border-accent-muted"
+                : "border-ink-line bg-ink-panel hover:border-accent-muted"
             }`}
           >
             {key} {count > 0 ? <span className="ml-1">{count}</span> : null}

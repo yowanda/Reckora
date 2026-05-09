@@ -20,6 +20,48 @@ const KINDS = [
 
 type Kind = (typeof KINDS)[number];
 
+const TOGGLES: Array<{
+  label: string;
+  key: "archive" | "screenshot" | "ai" | "breach" | "anchor";
+  description: string;
+}> = [
+  {
+    label: "archive",
+    key: "archive",
+    description: "Save WebArchive snapshots of every URL hit.",
+  },
+  {
+    label: "screenshot",
+    key: "screenshot",
+    description: "Capture full-page PNG of every URL surface.",
+  },
+  {
+    label: "ai",
+    key: "ai",
+    description: "Summarise + hypothesise via the configured LLM.",
+  },
+  {
+    label: "breach",
+    key: "breach",
+    description: "Check the email/username against breach corpora.",
+  },
+  {
+    label: "anchor",
+    key: "anchor",
+    description: "Pin the dossier to its evidence chain.",
+  },
+];
+
+const PLACEHOLDER: Record<Kind, string> = {
+  username: "octocat",
+  email: "person@example.com",
+  domain: "example.com",
+  url: "https://example.com/profile",
+  phone: "+14155552671",
+  wallet: "0xabc…",
+  avatar: "https://example.com/avatar.png",
+};
+
 async function postInvestigation(
   body: InvestigationRequest,
 ): Promise<SavedDossierPayload> {
@@ -31,11 +73,13 @@ export function NewInvestigationPage() {
   const toast = useToast();
   const [kind, setKind] = useState<Kind>("username");
   const [value, setValue] = useState("");
-  const [archive, setArchive] = useState(false);
-  const [screenshot, setScreenshot] = useState(false);
-  const [ai, setAi] = useState(false);
-  const [breach, setBreach] = useState(false);
-  const [anchor, setAnchor] = useState(false);
+  const [flags, setFlags] = useState<Record<(typeof TOGGLES)[number]["key"], boolean>>({
+    archive: false,
+    screenshot: false,
+    ai: false,
+    breach: false,
+    anchor: false,
+  });
 
   const mutation = useMutation({
     mutationFn: postInvestigation,
@@ -50,72 +94,119 @@ export function NewInvestigationPage() {
     event.preventDefault();
     mutation.mutate({
       seed: { kind, value },
-      archive,
-      screenshot,
-      ai,
-      breach,
-      anchor,
+      ...flags,
     });
   }
 
   return (
-    <section className="mx-auto max-w-xl space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">New investigation</h1>
-        <p className="text-sm text-zinc-500">
-          Runs the orchestrator against a seed identifier and stores the
-          dossier.
+    <section className="mx-auto max-w-2xl space-y-5">
+      <header>
+        <div className="text-2xs font-medium uppercase tracking-[0.22em] text-fg-dim">
+          Investigation
+        </div>
+        <h1 className="mt-1 text-2xl font-semibold tracking-snug text-fg">
+          New investigation
+        </h1>
+        <p className="mt-1 text-sm text-fg-muted">
+          Seed a dossier from any single identifier — Reckora's orchestrator
+          fans out across the configured collectors and writes the result back
+          to a stable subject record.
         </p>
-      </div>
+      </header>
+
       <form
         onSubmit={onSubmit}
-        className="space-y-4 rounded border border-border bg-bg-panel p-5"
+        className="overflow-hidden rounded-lg border border-ink-line bg-ink-panel"
       >
-        <div className="grid grid-cols-3 gap-3">
-          <label className="col-span-1 text-sm">
-            <span className="mb-1 block text-zinc-400">Kind</span>
-            <select
-              value={kind}
-              onChange={(e) => setKind(e.target.value as Kind)}
-              className="w-full rounded border border-border bg-bg-subtle px-2 py-1.5"
-            >
-              {KINDS.map((k) => (
-                <option key={k} value={k}>
-                  {k}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="col-span-2 text-sm">
-            <span className="mb-1 block text-zinc-400">Value</span>
-            <input
-              required
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder="octocat / example.com / +14155552671 …"
-              className="w-full rounded border border-border bg-bg-subtle px-2 py-1.5 outline-none focus:border-accent"
-            />
-          </label>
+        <div className="border-b border-ink-line bg-ink-subtle/40 px-4 py-2 text-2xs font-medium uppercase tracking-[0.2em] text-fg-dim">
+          Seed identifier
         </div>
-        <fieldset className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
-          <Toggle label="archive" checked={archive} onChange={setArchive} />
-          <Toggle
-            label="screenshot"
-            checked={screenshot}
-            onChange={setScreenshot}
-          />
-          <Toggle label="ai" checked={ai} onChange={setAi} />
-          <Toggle label="breach" checked={breach} onChange={setBreach} />
-          <Toggle label="anchor" checked={anchor} onChange={setAnchor} />
-        </fieldset>
-        {mutation.error ? <ErrorMessage error={mutation.error} /> : null}
-        <button
-          type="submit"
-          disabled={mutation.isPending}
-          className="w-full rounded bg-accent-muted px-3 py-2 text-sm font-medium hover:bg-accent disabled:opacity-50"
-        >
-          {mutation.isPending ? <Spinner label="Investigating…" /> : "Run"}
-        </button>
+        <div className="space-y-4 p-5">
+          <div className="grid gap-3 sm:grid-cols-[140px_1fr]">
+            <label className="block">
+              <span className="mb-1 block text-2xs font-medium uppercase tracking-[0.18em] text-fg-dim">
+                Kind
+              </span>
+              <select
+                value={kind}
+                onChange={(e) => setKind(e.target.value as Kind)}
+                className="w-full rounded border border-ink-line bg-ink/40 px-2 py-2 text-sm font-mono text-fg outline-none transition-colors focus:border-accent focus:shadow-ring"
+              >
+                {KINDS.map((k) => (
+                  <option key={k} value={k}>
+                    {k}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-2xs font-medium uppercase tracking-[0.18em] text-fg-dim">
+                Value
+              </span>
+              <input
+                required
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder={PLACEHOLDER[kind]}
+                className="w-full rounded border border-ink-line bg-ink/40 px-3 py-2 text-sm font-mono text-fg outline-none transition-colors placeholder:text-fg-dim focus:border-accent focus:shadow-ring"
+              />
+            </label>
+          </div>
+
+          <div>
+            <div className="mb-2 text-2xs font-medium uppercase tracking-[0.18em] text-fg-dim">
+              Collector flags
+            </div>
+            <fieldset className="grid gap-2 sm:grid-cols-2">
+              {TOGGLES.map((t) => (
+                <Toggle
+                  key={t.key}
+                  label={t.label}
+                  description={t.description}
+                  checked={flags[t.key]}
+                  onChange={(next) =>
+                    setFlags((prev) => ({ ...prev, [t.key]: next }))
+                  }
+                />
+              ))}
+            </fieldset>
+          </div>
+
+          {mutation.error ? <ErrorMessage error={mutation.error} /> : null}
+
+          <div className="flex items-center justify-between border-t border-ink-line pt-4">
+            <p className="text-2xs text-fg-dim">
+              Each run is logged + visible in <span className="font-mono">Activity</span>.
+            </p>
+            <button
+              type="submit"
+              disabled={mutation.isPending}
+              className="inline-flex items-center gap-2 rounded border border-accent/40 bg-accent-muted px-4 py-2 text-sm font-medium text-fg transition-colors hover:border-accent hover:bg-accent/30 disabled:opacity-50"
+            >
+              {mutation.isPending ? (
+                <Spinner label="Investigating…" />
+              ) : (
+                <>
+                  <span>Run investigation</span>
+                  <svg
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    className="h-3.5 w-3.5"
+                    aria-hidden
+                  >
+                    <path
+                      d="M3 8h10M9 4l4 4-4 4"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
       </form>
     </section>
   );
@@ -123,21 +214,36 @@ export function NewInvestigationPage() {
 
 function Toggle({
   label,
+  description,
   checked,
   onChange,
 }: {
   label: string;
+  description: string;
   checked: boolean;
   onChange: (next: boolean) => void;
 }) {
   return (
-    <label className="flex items-center gap-2 rounded border border-border bg-bg-subtle px-2 py-1.5">
+    <label
+      className={[
+        "flex cursor-pointer items-start gap-3 rounded border px-3 py-2 transition-colors",
+        checked
+          ? "border-accent/40 bg-accent-soft"
+          : "border-ink-line bg-ink-subtle/40 hover:border-ink-line2",
+      ].join(" ")}
+    >
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-accent"
       />
-      <span className="font-mono text-xs text-zinc-300">{label}</span>
+      <div className="min-w-0">
+        <div className="font-mono text-xs uppercase tracking-[0.12em] text-fg">
+          {label}
+        </div>
+        <div className="text-2xs text-fg-dim">{description}</div>
+      </div>
     </label>
   );
 }

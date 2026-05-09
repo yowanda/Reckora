@@ -65,12 +65,12 @@ export function WatchToggle({ subjectId }: { subjectId: string }) {
       onClick={() => setWatching.mutate(!watching)}
       className={`rounded border px-2 py-1 text-xs ${
         watching
-          ? "border-accent bg-accent-muted text-zinc-100"
-          : "border-border bg-bg-subtle text-zinc-300 hover:text-zinc-100"
+          ? "border-accent bg-accent-muted text-fg"
+          : "border-ink-line bg-ink-subtle text-fg hover:text-fg"
       }`}
     >
       {watching ? "Watching" : "Watch"}
-      <span className="ml-1 text-zinc-400">· {count}</span>
+      <span className="ml-1 text-fg-muted">· {count}</span>
     </button>
   );
 }
