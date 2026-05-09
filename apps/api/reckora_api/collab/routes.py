@@ -48,6 +48,7 @@ from reckora_api.collab.schemas import (
     AssigneeEntry,
     CommentCreate,
     CommentEntry,
+    CommentUpdate,
 )
 from reckora_api.deps import (
     current_user,
@@ -325,6 +326,80 @@ def create_comment(
     )
     resolve = _UsernameCache(user_repo)
     return _comment_to_entry(row, resolve, mentions=resolved_mentions)
+
+
+@comments_router.patch(
+    "/{comment_id}",
+    response_model=CommentEntry,
+    responses={
+        403: {"description": "actor is not the comment author"},
+        404: {"description": "subject or comment not found"},
+    },
+)
+def update_comment(
+    subject_id: str,
+    comment_id: int,
+    payload: CommentUpdate,
+    actor: Annotated[UserRecord, Depends(current_user)],
+    subject_repo: Annotated[SubjectRepository, Depends(get_subject_repo)],
+    access_repo: Annotated[AccessRepository, Depends(get_access_repo)],
+    user_repo: Annotated[UserRepository, Depends(get_user_repo)],
+) -> CommentEntry:
+    """Edit a comment's body in place.
+
+    Authorisation is **author-only** — not even the dossier owner or
+    an admin can rewrite someone else's words. That's a deliberate
+    asymmetry with delete: deletion already preserves audit
+    integrity (the comment vanishes; nobody is on the hook for what
+    they didn't say), while editing somebody else's comment would
+    *attribute new words to them*. Owners and admins who want to
+    suppress an objectionable comment can still delete it.
+
+    Other readers (sharers, assignees, outsiders) get the same 404
+    we use elsewhere so we don't leak comment existence. The author
+    themselves keeps editing access even after losing read access on
+    the dossier (e.g. their share was revoked) — being on the hook
+    for your own past words trumps the access window.
+    """
+    _ensure_subject_exists(subject_id, subject_repo)
+    comment = access_repo.get_comment(comment_id)
+    if comment is None or comment.subject_id != subject_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no comment with id {comment_id} on subject {subject_id!r}",
+        )
+    if comment.author_user_id != actor.id:
+        # Owners / admins / sharers / assignees can all *see* the
+        # comment, so a 403 here is the honest answer for readers
+        # while still giving outsiders a 404 to mirror the rest of
+        # the API surface.
+        if actor.role is Role.ADMIN or access_repo.can_read(subject_id, actor.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="only the comment author can edit it",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no comment with id {comment_id} on subject {subject_id!r}",
+        )
+    body = payload.body.strip()
+    if not body:
+        raise HTTPException(
+            status_code=422,
+            detail="comment body must contain at least one non-whitespace character",
+        )
+    updated = access_repo.update_comment(
+        comment_id,
+        body,
+        updated_at=datetime.now(UTC).isoformat(),
+    )
+    if updated is None:  # pragma: no cover - guarded by the get_comment above
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no comment with id {comment_id} on subject {subject_id!r}",
+        )
+    resolve = _UsernameCache(user_repo)
+    return _comment_to_entry(updated, resolve)
 
 
 @comments_router.delete(
