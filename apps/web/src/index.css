@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.prose-invert :where(a):not(:where([class~="not-prose"], [class~="not-prose"] *)) {
+  color: #7aa2f7;
+}
