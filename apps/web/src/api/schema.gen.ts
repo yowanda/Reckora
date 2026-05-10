@@ -1259,7 +1259,7 @@ export interface components {
             ai_iterations: number;
             /**
              * Ai Tools
-             * @description When ai_iterations >= 1, allow the AgentLoop's LLM to call web_search and fetch_url so it can gather evidence beyond what the rule-based collectors found. Requires OPENAI_API_KEY.
+             * @description When ai_iterations >= 1, allow the AgentLoop's LLM to call web_search and fetch_url so it can gather evidence beyond what the rule-based collectors found. Works under both OPENAI_API_KEY (chat-completions function calling) and ChatGPT OAuth (Responses-API function calling).
              * @default false
              */
             ai_tools: boolean;
@@ -1271,7 +1271,7 @@ export interface components {
             ai_tool_calls: number;
             /**
              * Breach
-             * @description Enable the Have I Been Pwned breach-lookup collector for email identifiers (requires HIBP_API_KEY; off by default).
+             * @description Enable the data-leak surface: Have I Been Pwned breach lookup for email identifiers (requires HIBP_API_KEY) plus a public document-share / paste-site probe (Scribd, pdfcoffee, pdfslide, SlideShare, Issuu, 4shared, archive.org, Pastebin) for username + email seeds. Off by default.
              * @default false
              */
             breach: boolean;

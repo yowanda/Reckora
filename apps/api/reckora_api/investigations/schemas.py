@@ -68,8 +68,11 @@ class InvestigationRequest(BaseModel):
     breach: bool = Field(
         default=False,
         description=(
-            "Enable the Have I Been Pwned breach-lookup collector for "
-            "email identifiers (requires HIBP_API_KEY; off by default)."
+            "Enable the data-leak surface: Have I Been Pwned breach lookup "
+            "for email identifiers (requires HIBP_API_KEY) plus a public "
+            "document-share / paste-site probe (Scribd, pdfcoffee, "
+            "pdfslide, SlideShare, Issuu, 4shared, archive.org, Pastebin) "
+            "for username + email seeds. Off by default."
         ),
     )
     anchor: bool = Field(
