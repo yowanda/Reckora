@@ -60,6 +60,30 @@ class Settings(BaseSettings):
     # feature flag — the collector is always wired into the orchestrator
     # and the key is purely a rate-limit lever.
     etherscan_api_key: str | None = Field(default=None, validation_alias="ETHERSCAN_API_KEY")
+    # AgentRouter (https://agentrouter.org) is a third-party LLM gateway that
+    # exposes OpenAI-, Anthropic-, and Gemini-compatible endpoints behind a
+    # single bearer token. We talk to it via the OpenAI-compatible
+    # ``/v1/chat/completions`` shape so the existing ``AsyncOpenAI`` client
+    # can be reused; only the base URL and credential change.
+    #
+    # ``agentrouter_api_key`` is the *system-level* fallback for users who
+    # have not set their own AgentRouter key on their profile (BYOK). When
+    # both are unset the AgentRouter path raises with a helpful message.
+    agentrouter_api_key: str | None = Field(
+        default=None,
+        validation_alias="AGENTROUTER_API_KEY",
+    )
+    agentrouter_base_url: str = Field(
+        default="https://agentrouter.org/v1",
+        validation_alias="RECKORA_AGENTROUTER_BASE_URL",
+    )
+    # Hardcoded default uses Anthropic's Claude Opus 4.6 alias as exposed by
+    # AgentRouter's console (see /console/token model picker). Override via
+    # ``RECKORA_AGENTROUTER_MODEL`` if a different upstream model is needed.
+    agentrouter_model: str = Field(
+        default="claude-opus-4-6",
+        validation_alias="RECKORA_AGENTROUTER_MODEL",
+    )
 
 
 settings = Settings()

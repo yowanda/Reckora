@@ -1,6 +1,6 @@
-"""Async wrapper around the OpenAI / ChatGPT Codex chat APIs.
+"""Async wrapper around the OpenAI / ChatGPT Codex / AgentRouter chat APIs.
 
-Reckora supports two auth modes through the same ``complete`` interface:
+Reckora supports three auth modes through the same ``complete`` interface:
 
 * **API key** (``OPENAI_API_KEY``, ``sk-...``): hits
   ``api.openai.com/v1/chat/completions`` via the ``openai`` SDK.
@@ -11,9 +11,17 @@ Reckora supports two auth modes through the same ``complete`` interface:
   streaming client. Lets a ChatGPT Plus / Pro subscriber drive the
   reasoning layer without provisioning a separate Platform billing
   account.
+* **AgentRouter** (``AGENTROUTER_API_KEY`` env var or per-user BYOK):
+  hits ``agentrouter.org/v1/chat/completions``. AgentRouter is an
+  OpenAI-compatible LLM gateway that routes to Anthropic Claude /
+  DeepSeek / GLM / etc. behind a single bearer token, so we reuse
+  the OpenAI SDK pointed at a different ``base_url``.
 
 Resolution order at ``complete`` time:
 
+0. Explicit ``provider="agentrouter" | "openai" | "chatgpt_oauth"``
+   constructor arg pins one path and skips the auto chain. Used by
+   the API layer when the request payload selects a provider.
 1. Explicit ``oauth_credentials=`` constructor arg (tests / library
    embedders pinning a specific token).
 2. Explicit ``api_key=`` constructor arg or ``OPENAI_API_KEY`` env
@@ -23,7 +31,7 @@ Resolution order at ``complete`` time:
    ``~/.config/reckora/auth.json``) — the result of a successful
    ``reckora auth login``.
 4. Otherwise: ``RuntimeError`` with a message that points the user
-   at the two ways to authenticate.
+   at the three ways to authenticate.
 
 OAuth mode auto-refreshes once on 401: if the access token has
 expired (or has been revoked), we trade the long-lived refresh token
@@ -39,7 +47,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from openai import AsyncOpenAI
@@ -52,6 +60,10 @@ from ..auth.codex_client import (
 )
 from ..auth.oauth import OAuthCredentials, refresh_credentials
 from ..auth.storage import load_credentials, save_credentials
+
+ProviderName = Literal["auto", "openai", "chatgpt_oauth", "agentrouter"]
+
+VALID_PROVIDERS: frozenset[str] = frozenset({"auto", "openai", "chatgpt_oauth", "agentrouter"})
 
 
 class ToolsNotSupportedError(RuntimeError):
@@ -105,7 +117,16 @@ class ReasoningClient:
         oauth_credentials: OAuthCredentials | None = None,
         oauth_model: str = "gpt-5.5",
         credentials_path: Path | None = None,
+        agentrouter_api_key: str | None = None,
+        agentrouter_base_url: str = "https://agentrouter.org/v1",
+        agentrouter_model: str = "claude-opus-4-6",
+        provider: ProviderName = "auto",
     ) -> None:
+        if provider not in VALID_PROVIDERS:
+            raise ValueError(
+                f"unknown provider {provider!r}; expected one of: "
+                + ", ".join(sorted(VALID_PROVIDERS))
+            )
         # Resolve API-key candidate eagerly so callers passing
         # ``api_key=None`` still see the env var (preserves the
         # historical contract).
@@ -116,10 +137,19 @@ class ReasoningClient:
         self._oauth_credentials = oauth_credentials
         self._oauth_model = oauth_model
         self._credentials_path = credentials_path
-        # Lazy-instantiated; one OpenAI SDK client + one shared
-        # AsyncClient for the OAuth path so we don't pay the TLS
-        # handshake on every ``complete`` call.
+        # AgentRouter (https://agentrouter.org) speaks the OpenAI
+        # ``/v1/chat/completions`` shape, so we reuse ``AsyncOpenAI``
+        # with a swapped ``base_url`` rather than maintaining a
+        # second SDK adapter.
+        self._agentrouter_api_key = agentrouter_api_key or os.environ.get("AGENTROUTER_API_KEY")
+        self._agentrouter_base_url = agentrouter_base_url
+        self._agentrouter_model = agentrouter_model
+        self._provider: ProviderName = provider
+        # Lazy-instantiated; one OpenAI SDK client per backend +
+        # one shared AsyncClient for the OAuth path so we don't pay
+        # the TLS handshake on every ``complete`` call.
         self._openai: AsyncOpenAI | None = None
+        self._agentrouter_openai: AsyncOpenAI | None = None
         self._http: httpx.AsyncClient | None = None
 
     @property
@@ -132,15 +162,47 @@ class ReasoningClient:
         """The model name used by the ChatGPT OAuth mode."""
         return self._oauth_model
 
+    @property
+    def agentrouter_model(self) -> str:
+        """The model name used by the AgentRouter mode."""
+        return self._agentrouter_model
+
+    @property
+    def provider(self) -> ProviderName:
+        """Resolved provider preference. ``auto`` = lazy chain."""
+        return self._provider
+
     async def complete(self, system: str, user: str) -> str:
         """Run a single completion and return the assistant text.
 
-        Picks API-key vs OAuth lazily so a process that has both
-        credentials available (e.g. CI with ``OPENAI_API_KEY`` set
-        on a developer laptop that also has a ``~/.config/reckora``
-        login from a different project) deterministically prefers
-        the API key.
+        Picks API-key vs OAuth vs AgentRouter lazily. When
+        ``provider`` is ``"auto"`` (the default) the resolution
+        order is API key > ChatGPT OAuth, with AgentRouter only
+        used when the caller pins it explicitly. When ``provider``
+        is anything else the corresponding path is required and a
+        missing credential is a hard error.
         """
+        if self._provider == "agentrouter":
+            if not self._agentrouter_api_key:
+                raise RuntimeError(
+                    "provider='agentrouter' was requested but no AgentRouter "
+                    "API key is configured (set AGENTROUTER_API_KEY or save "
+                    "a per-user key on the user's settings)."
+                )
+            return await self._complete_via_agentrouter(system, user)
+        if self._provider == "openai":
+            if not self._api_key:
+                raise RuntimeError("provider='openai' was requested but OPENAI_API_KEY is unset.")
+            return await self._complete_via_api_key(system, user)
+        if self._provider == "chatgpt_oauth":
+            creds = self._oauth_credentials or load_credentials(path=self._credentials_path)
+            if creds is None:
+                raise RuntimeError(
+                    "provider='chatgpt_oauth' was requested but no OAuth "
+                    "credentials are present — run `reckora auth login`."
+                )
+            return await self._complete_via_oauth(creds, system, user)
+        # provider == "auto" — historical chain.
         if self._api_key:
             return await self._complete_via_api_key(system, user)
         creds = self._oauth_credentials or load_credentials(path=self._credentials_path)
@@ -154,6 +216,25 @@ class ReasoningClient:
         client = self._get_openai_client()
         resp = await client.chat.completions.create(
             model=self._model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=self._temperature,
+        )
+        return resp.choices[0].message.content or ""
+
+    async def _complete_via_agentrouter(self, system: str, user: str) -> str:
+        """Run a single completion through AgentRouter.
+
+        AgentRouter exposes an OpenAI-compatible
+        ``/v1/chat/completions`` endpoint, so the wire shape and
+        response parsing match :meth:`_complete_via_api_key`. Only
+        the SDK ``base_url`` and credential differ.
+        """
+        client = self._get_agentrouter_client()
+        resp = await client.chat.completions.create(
+            model=self._agentrouter_model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -179,10 +260,49 @@ class ReasoningClient:
         (which is what ``chatgpt.com/backend-api/codex/responses``
         natively speaks).
 
-        Dispatch order matches :meth:`complete`: explicit
-        ``OPENAI_API_KEY`` wins, otherwise ChatGPT OAuth, otherwise
-        :class:`ToolsNotSupportedError` (no usable credentials).
+        Dispatch order matches :meth:`complete`: when ``provider``
+        is pinned the corresponding path is required; under
+        ``provider='auto'`` the resolution order is API key >
+        ChatGPT OAuth, with AgentRouter only used when explicitly
+        selected. Missing credentials raise
+        :class:`ToolsNotSupportedError`.
         """
+        if self._provider == "agentrouter":
+            if not self._agentrouter_api_key:
+                raise ToolsNotSupportedError(
+                    "provider='agentrouter' was requested but no AgentRouter "
+                    "API key is configured (set AGENTROUTER_API_KEY or save "
+                    "a per-user key on the user's settings)."
+                )
+            return await self._chat_with_tools_via_agentrouter(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+        if self._provider == "openai":
+            if not self._api_key:
+                raise ToolsNotSupportedError(
+                    "provider='openai' was requested but OPENAI_API_KEY is unset."
+                )
+            return await self._chat_with_tools_via_api_key(
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+        if self._provider == "chatgpt_oauth":
+            creds = self._oauth_credentials or load_credentials(path=self._credentials_path)
+            if creds is None:
+                raise ToolsNotSupportedError(
+                    "provider='chatgpt_oauth' was requested but no OAuth "
+                    "credentials are present — run `reckora auth login`."
+                )
+            return await self._chat_with_tools_via_oauth(
+                credentials=creds,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+        # provider == "auto" — historical chain.
         if self._api_key:
             return await self._chat_with_tools_via_api_key(
                 messages=messages,
@@ -202,6 +322,29 @@ class ReasoningClient:
             tool_choice=tool_choice,
         )
 
+    async def _chat_with_tools_via_agentrouter(
+        self,
+        *,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]],
+        tool_choice: str,
+    ) -> AssistantTurn:
+        """Tool-call round-trip via AgentRouter.
+
+        AgentRouter normalises the OpenAI ``tools`` shape across the
+        upstream providers it routes to (Anthropic, GLM, DeepSeek,
+        …) so we send the same wire format as
+        :meth:`_chat_with_tools_via_api_key` and reuse the same
+        response decoder; only the underlying SDK client differs.
+        """
+        return await self._chat_with_tools_using_openai_sdk(
+            client=self._get_agentrouter_client(),
+            model=self._agentrouter_model,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+
     async def _chat_with_tools_via_api_key(
         self,
         *,
@@ -209,13 +352,37 @@ class ReasoningClient:
         tools: Sequence[dict[str, Any]],
         tool_choice: str,
     ) -> AssistantTurn:
-        client = self._get_openai_client()
+        return await self._chat_with_tools_using_openai_sdk(
+            client=self._get_openai_client(),
+            model=self._model,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+
+    async def _chat_with_tools_using_openai_sdk(
+        self,
+        *,
+        client: AsyncOpenAI,
+        model: str,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]],
+        tool_choice: str,
+    ) -> AssistantTurn:
+        """Shared implementation for OpenAI-SDK-based providers.
+
+        Both the direct OpenAI API-key path and the AgentRouter
+        gateway speak the OpenAI ``/v1/chat/completions`` shape and
+        return the same ``ChoiceMessage`` payload, so encoding and
+        decoding lives here — the per-provider methods only own
+        client construction and the model name.
+        """
         # The OpenAI SDK's ``messages``/``tools`` parameters are typed
         # as a Union of TypedDicts; we hand-roll dicts here because the
         # tool-call message shape only needs runtime correctness, not a
         # static commitment to one of the TypedDict variants.
         resp = await client.chat.completions.create(  # type: ignore[call-overload]
-            model=self._model,
+            model=model,
             messages=list(messages),
             tools=list(tools),
             tool_choice=tool_choice,
@@ -352,6 +519,16 @@ class ReasoningClient:
             self._openai = AsyncOpenAI(api_key=self._api_key)
         return self._openai
 
+    def _get_agentrouter_client(self) -> AsyncOpenAI:
+        if self._agentrouter_api_key is None:
+            raise RuntimeError("AGENTROUTER_API_KEY is not configured")
+        if self._agentrouter_openai is None:
+            self._agentrouter_openai = AsyncOpenAI(
+                api_key=self._agentrouter_api_key,
+                base_url=self._agentrouter_base_url,
+            )
+        return self._agentrouter_openai
+
     def _get_http_client(self) -> httpx.AsyncClient:
         if self._http is None:
             self._http = httpx.AsyncClient(timeout=httpx.Timeout(60.0))
@@ -372,6 +549,10 @@ class ReasoningClient:
         if openai_client is not None:
             await openai_client.close()
             self._openai = None
+        agentrouter_client = self._agentrouter_openai
+        if agentrouter_client is not None:
+            await agentrouter_client.close()
+            self._agentrouter_openai = None
 
 
 def _messages_to_responses_input(

@@ -52,6 +52,18 @@ class APISettings(BaseSettings):
         default="/screenshots",
         validation_alias="RECKORA_API_SCREENSHOTS_URL_PREFIX",
     )
+    # Filesystem path holding the Fernet symmetric key used to
+    # encrypt per-user secrets at rest (today: AgentRouter API
+    # keys). When unset we co-locate the key with the SQLite file
+    # so a vanilla single-host deployment Just Works — the file is
+    # auto-generated on first start and persists across restarts.
+    # Operators should back this file up alongside the database;
+    # losing it makes every saved BYOK key unrecoverable (which is
+    # the desired property if the host is compromised).
+    fernet_key_path: str = Field(
+        default="",
+        validation_alias="RECKORA_API_FERNET_KEY_PATH",
+    )
 
     @property
     def cors_origins(self) -> list[str]:

@@ -119,6 +119,9 @@ export function NewInvestigationPage() {
       ai_iterations: ai_agent ? 2 : 0,
       ai_tools: ai_agent,
       ai_tool_calls: 8,
+      // PR2 will surface a provider picker in the UI; until then,
+      // submit "auto" so the backend keeps its API-key → OAuth chain.
+      llm_provider: "auto",
     });
   }
 

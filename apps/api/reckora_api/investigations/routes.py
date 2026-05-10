@@ -36,6 +36,7 @@ from reckora_api.deps import (
     get_orchestrator,
     get_subject_repo,
     get_user_repo,
+    get_user_settings_repo,
 )
 from reckora_api.investigations.schemas import (
     IdentifierIn,
@@ -43,6 +44,7 @@ from reckora_api.investigations.schemas import (
     SavedDossierPayload,
     SubjectSummary,
 )
+from reckora_api.settings.repository import UserSettingsRepository
 
 
 def _resolve_owner_username(
@@ -128,6 +130,7 @@ async def create_investigation(
     orchestrator: Annotated[Orchestrator, Depends(get_orchestrator)],
     repo: Annotated[SubjectRepository, Depends(get_subject_repo)],
     access_repo: Annotated[AccessRepository, Depends(get_access_repo)],
+    settings_repo: Annotated[UserSettingsRepository, Depends(get_user_settings_repo)],
 ) -> SavedDossierPayload:
     """Run a Reckora investigation and persist the result.
 
@@ -164,14 +167,27 @@ async def create_investigation(
     summary_md: str | None = None
     hypotheses_md: str | None = None
     if payload.ai:
-        # Both auth paths (OPENAI_API_KEY and ChatGPT OAuth) now drive
-        # function calling natively, so ``ai_tools=true`` no longer
-        # requires an API key. ReasoningClient resolves credentials
-        # lazily and raises ToolsNotSupportedError if neither path is
-        # configured at request time.
+        # Three auth paths are wired through ``ReasoningClient`` —
+        # ``openai`` (chat-completions API key), ``chatgpt_oauth``
+        # (Codex Responses-API), and ``agentrouter`` (OpenAI-compat
+        # gateway with BYOK). The default ``auto`` keeps the
+        # historical behaviour: API key first, then OAuth.
+        #
+        # For the BYOK path we look up the current user's saved
+        # AgentRouter key first; if absent the system-wide
+        # ``AGENTROUTER_API_KEY`` env var is used as a fallback.
+        agentrouter_api_key: str | None = None
+        if payload.llm_provider == "agentrouter":
+            agentrouter_api_key = settings_repo.get_agentrouter_key(user.id)
+        if not agentrouter_api_key:
+            agentrouter_api_key = engine_settings.agentrouter_api_key
         client = ReasoningClient(
             api_key=engine_settings.openai_api_key,
             model=engine_settings.openai_model,
+            agentrouter_api_key=agentrouter_api_key,
+            agentrouter_base_url=engine_settings.agentrouter_base_url,
+            agentrouter_model=engine_settings.agentrouter_model,
+            provider=payload.llm_provider,
         )
         if payload.ai_iterations >= 1:
             researcher: Researcher | None = None

@@ -20,6 +20,7 @@ from reckora_api.auth.models import Role, UserRecord
 from reckora_api.auth.repository import UserRepository
 from reckora_api.auth.tokens import decode_token
 from reckora_api.config import APISettings
+from reckora_api.settings.repository import UserSettingsRepository
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token", auto_error=True)
 
@@ -48,6 +49,11 @@ def get_orchestrator(request: Request) -> Orchestrator:
     factory: Any = request.app.state.orchestrator_factory
     orch: Orchestrator = factory()
     return orch
+
+
+def get_user_settings_repo(request: Request) -> UserSettingsRepository:
+    repo: UserSettingsRepository = request.app.state.user_settings_repo
+    return repo
 
 
 def current_user(

@@ -2748,6 +2748,78 @@
         }
       }
     },
+    "/api/v1/users/me/settings": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get Settings",
+        "description": "Return presence flags for the current user's saved settings.",
+        "operationId": "get_settings_api_v1_users_me_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSettingsPublic"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Update Settings",
+        "description": "Save or clear the current user's BYOK secrets.\n\nEmpty string in ``agentrouter_api_key`` is the explicit \"clear\"\nsignal \u2014 it removes the encrypted ciphertext from the row but\nkeeps the row itself so future audit timestamps are continuous.",
+        "operationId": "update_settings_api_v1_users_me_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserSettingsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSettingsPublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -3309,6 +3381,18 @@
             "title": "Anchor",
             "description": "Compute a cross-trace Merkle root and submit it to public OpenTimestamps calendars for tamper-evident timestamping (requires network access to the calendar fleet; off by default).",
             "default": false
+          },
+          "llm_provider": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "openai",
+              "chatgpt_oauth",
+              "agentrouter"
+            ],
+            "title": "Llm Provider",
+            "description": "LLM backend used when ai=true. 'auto' (default) tries OPENAI_API_KEY first, then ChatGPT OAuth. 'openai' / 'chatgpt_oauth' / 'agentrouter' pin the request to one path. The AgentRouter path uses the per-user BYOK key saved on the account, falling back to AGENTROUTER_API_KEY.",
+            "default": "auto"
           }
         },
         "additionalProperties": false,
@@ -4087,6 +4171,35 @@
         ],
         "title": "UserPublic",
         "description": "Anything the API ever returns about a user."
+      },
+      "UserSettingsPublic": {
+        "properties": {
+          "has_agentrouter_key": {
+            "type": "boolean",
+            "title": "Has Agentrouter Key",
+            "description": "True if the current user has saved a per-account AgentRouter API key. Used to drive the BYOK indicator in the UI.",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UserSettingsPublic",
+        "description": "Body returned by ``GET /api/v1/users/me/settings``.\n\nCarries presence flags only \u2014 the actual API key, once written,\nis opaque to the user-facing surface (the only thing the UI\nneeds to know is whether one is set)."
+      },
+      "UserSettingsUpdate": {
+        "properties": {
+          "agentrouter_api_key": {
+            "type": "string",
+            "maxLength": 512,
+            "title": "Agentrouter Api Key",
+            "description": "AgentRouter (https://agentrouter.org) API key for the BYOK path. Send a non-empty string to save / replace the key, or an empty string to clear it. The plaintext value is never returned by GET endpoints; only presence is exposed.",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UserSettingsUpdate",
+        "description": "Body for ``PUT /api/v1/users/me/settings``.\n\nThe empty string is the explicit \"clear\" signal so the OpenAPI\nschema can describe both operations (set + clear) with a single\nnon-nullable field. Omitting the field on a PATCH-style call is\nnot supported \u2014 PUT semantics here are \"send the desired full\nstate of the user's settings\"."
       },
       "ValidationError": {
         "properties": {
