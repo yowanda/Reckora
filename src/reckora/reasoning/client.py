@@ -51,6 +51,7 @@ upstream so the user can re-login.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections.abc import Sequence
@@ -59,7 +60,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from anthropic import AsyncAnthropic
+from anthropic import Anthropic
 from openai import AsyncOpenAI
 
 from ..auth.codex_client import (
@@ -166,7 +167,13 @@ class ReasoningClient:
         # AsyncClient for the OAuth path so we don't pay the TLS
         # handshake on every ``complete`` call.
         self._openai: AsyncOpenAI | None = None
-        self._agentrouter_anthropic: AsyncAnthropic | None = None
+        # AgentRouter's WAF rejects the **async** httpx TLS fingerprint
+        # that ``AsyncAnthropic`` produces ("unauthorized client detected")
+        # but accepts the **sync** httpx fingerprint that ``Anthropic``
+        # uses. We therefore hold the sync SDK client and dispatch its
+        # blocking ``messages.create`` call inside ``asyncio.to_thread``.
+        # See ``_get_agentrouter_client`` for details.
+        self._agentrouter_anthropic: Anthropic | None = None
         self._http: httpx.AsyncClient | None = None
 
     @property
@@ -244,20 +251,28 @@ class ReasoningClient:
     async def _complete_via_agentrouter(self, system: str, user: str) -> str:
         """Run a single completion through AgentRouter.
 
-        Uses the Anthropic SDK against the Anthropic-compatible
-        ``/v1/messages`` route; AgentRouter's WAF blocks the OpenAI
-        SDK fingerprint regardless of credential. The system prompt
-        is hoisted out of the messages array (Anthropic requires it
-        as a separate parameter).
+        Uses the **sync** Anthropic SDK against the Anthropic-compatible
+        ``/v1/messages`` route, dispatched in a thread so we don't
+        block the event loop. AgentRouter's WAF blocks the OpenAI SDK
+        fingerprint *and* the async Anthropic-SDK (httpx-async) TLS
+        fingerprint with ``unauthorized client detected``; only the
+        sync httpx fingerprint that ``Anthropic`` (the blocking SDK
+        client) emits is on the allowlist. The system prompt is
+        hoisted out of the messages array (Anthropic requires it as a
+        separate top-level parameter).
         """
         client = self._get_agentrouter_client()
-        resp = await client.messages.create(
-            model=self._agentrouter_model,
-            system=system,
-            max_tokens=self._agentrouter_max_tokens,
-            temperature=self._temperature,
-            messages=[{"role": "user", "content": user}],
-        )
+
+        def _run() -> Any:
+            return client.messages.create(
+                model=self._agentrouter_model,
+                system=system,
+                max_tokens=self._agentrouter_max_tokens,
+                temperature=self._temperature,
+                messages=[{"role": "user", "content": user}],
+            )
+
+        resp = await asyncio.to_thread(_run)
         return _anthropic_text_from_blocks(resp.content)
 
     async def chat_with_tools(
@@ -360,18 +375,24 @@ class ReasoningClient:
         system, anthropic_messages = _messages_to_anthropic_messages(messages)
         anthropic_tools = _tools_to_anthropic_tools(tools)
         anthropic_tool_choice = _tool_choice_to_anthropic(tool_choice)
+
         # Anthropic typing accepts the union of message/tool TypedDicts;
         # we hand-roll dicts here because the runtime contract is what
         # matters for the WAF-allowlisted /v1/messages payload.
-        resp = await client.messages.create(  # type: ignore[call-overload]
-            model=self._agentrouter_model,
-            system=system or "",
-            max_tokens=self._agentrouter_max_tokens,
-            temperature=self._temperature,
-            messages=anthropic_messages,
-            tools=anthropic_tools,
-            tool_choice=anthropic_tool_choice,
-        )
+        # Dispatched via ``asyncio.to_thread`` so the WAF sees the
+        # sync httpx fingerprint (the async one is blocked).
+        def _run() -> Any:
+            return client.messages.create(  # type: ignore[call-overload]
+                model=self._agentrouter_model,
+                system=system or "",
+                max_tokens=self._agentrouter_max_tokens,
+                temperature=self._temperature,
+                messages=anthropic_messages,
+                tools=anthropic_tools,
+                tool_choice=anthropic_tool_choice,
+            )
+
+        resp = await asyncio.to_thread(_run)
         return _anthropic_response_to_assistant_turn(resp)
 
     async def _chat_with_tools_via_api_key(
@@ -548,7 +569,16 @@ class ReasoningClient:
             self._openai = AsyncOpenAI(api_key=self._api_key)
         return self._openai
 
-    def _get_agentrouter_client(self) -> AsyncAnthropic:
+    def _get_agentrouter_client(self) -> Anthropic:
+        """Return the lazily-built sync Anthropic client.
+
+        Returns the **sync** ``Anthropic`` (not ``AsyncAnthropic``)
+        because AgentRouter's Aliyun WAF allowlists by request
+        fingerprint and only the sync httpx TLS handshake is on the
+        allowlist. ``AsyncAnthropic`` -> 401 ``unauthorized client``.
+        Callers must dispatch ``messages.create`` through
+        ``asyncio.to_thread`` since the SDK call is blocking.
+        """
         if self._agentrouter_api_key is None:
             raise RuntimeError("AGENTROUTER_API_KEY is not configured")
         if self._agentrouter_anthropic is None:
@@ -560,7 +590,7 @@ class ReasoningClient:
             base = self._agentrouter_base_url.rstrip("/")
             if base.endswith("/v1"):
                 base = base[: -len("/v1")]
-            self._agentrouter_anthropic = AsyncAnthropic(
+            self._agentrouter_anthropic = Anthropic(
                 api_key=self._agentrouter_api_key,
                 base_url=base + "/",
             )
@@ -588,7 +618,9 @@ class ReasoningClient:
             self._openai = None
         agentrouter_client = self._agentrouter_anthropic
         if agentrouter_client is not None:
-            await agentrouter_client.close()
+            # Sync ``Anthropic`` exposes a blocking ``.close()`` only;
+            # dispatch in a thread to avoid stalling the event loop.
+            await asyncio.to_thread(agentrouter_client.close)
             self._agentrouter_anthropic = None
 
 

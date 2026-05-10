@@ -3,11 +3,14 @@
 AgentRouter (https://agentrouter.org) is fronted by an Aliyun WAF
 that allowlists requests by client fingerprint. Generic
 OpenAI-Python-SDK calls are rejected (``unauthorized client
-detected``) regardless of credential, so the AgentRouter path uses
-the **Anthropic** SDK against the Anthropic-compatible
-``/v1/messages`` route. Tests therefore mock the Anthropic wire
+detected``) regardless of credential, **and so are async-Anthropic
+SDK calls** -- only the *sync* Anthropic SDK fingerprint is on the
+allowlist. The AgentRouter path therefore uses the synchronous
+``Anthropic`` client dispatched in a worker thread via
+``asyncio.to_thread``. Tests therefore mock the Anthropic wire
 shape (``system`` parameter, ``content`` block array, ``tool_use``
-blocks, etc.) rather than the OpenAI chat-completions shape.
+blocks, etc.) on the sync client and use an
+``MockTransport``-backed ``httpx.Client``.
 
 Coverage:
 
@@ -87,9 +90,15 @@ def _make_recording_transport(
 
 
 def _wire_mock_anthropic(client: ReasoningClient, transport: httpx.MockTransport) -> None:
-    """Bypass lazy SDK construction by injecting a pre-built Anthropic client."""
-    http = httpx.AsyncClient(transport=transport)
-    client._agentrouter_anthropic = anthropic.AsyncAnthropic(
+    """Bypass lazy SDK construction by injecting a pre-built Anthropic client.
+
+    Uses the **sync** ``httpx.Client`` (and therefore the **sync**
+    ``Anthropic`` SDK) because that's the only fingerprint AgentRouter's
+    WAF allows in production -- the production code path is sync-only,
+    dispatched through ``asyncio.to_thread``.
+    """
+    http = httpx.Client(transport=transport)
+    client._agentrouter_anthropic = anthropic.Anthropic(
         api_key="sk-byok-test",
         base_url="https://agentrouter.example/",
         http_client=http,
@@ -357,11 +366,12 @@ async def test_agentrouter_base_url_strips_legacy_v1_suffix(configured: str) -> 
         agentrouter_model="claude-opus-4-6",
         provider="agentrouter",
     )
-    # Wire a manually-built Anthropic client that exercises the same
-    # ``/v1`` coercion the lazy constructor would apply.
-    client._agentrouter_anthropic = None
+    # Build the SDK client through the production code path so the
+    # ``/v1``-suffix coercion runs, then swap its underlying httpx
+    # transport to the in-memory mock so the request never leaves
+    # the process.
     real_client = client._get_agentrouter_client()
-    real_client._client = httpx.AsyncClient(transport=transport)
+    real_client._client = httpx.Client(transport=transport)
     try:
         await client.complete("system", "user")
     finally:
