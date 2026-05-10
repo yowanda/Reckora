@@ -552,9 +552,17 @@ class ReasoningClient:
         if self._agentrouter_api_key is None:
             raise RuntimeError("AGENTROUTER_API_KEY is not configured")
         if self._agentrouter_anthropic is None:
+            # The Anthropic SDK appends ``/v1/messages`` to whatever
+            # ``base_url`` it's given, so a stale ``.../v1`` config
+            # (left over from the old OpenAI-SDK path) would double to
+            # ``/v1/v1/messages``. Strip a single trailing ``/v1`` so
+            # both forms resolve to the same endpoint.
+            base = self._agentrouter_base_url.rstrip("/")
+            if base.endswith("/v1"):
+                base = base[: -len("/v1")]
             self._agentrouter_anthropic = AsyncAnthropic(
                 api_key=self._agentrouter_api_key,
-                base_url=self._agentrouter_base_url,
+                base_url=base + "/",
             )
         return self._agentrouter_anthropic
 
