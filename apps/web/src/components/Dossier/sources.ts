@@ -49,6 +49,7 @@ const SOURCE_META: Record<string, SourceMeta> = {
     label: "Social presence probe",
     tags: ["social", "probe"],
   },
+  doc_leak: { label: "Doc-leak / paste search", tags: ["breach", "leak"] },
   user_provided: { label: "User-provided", tags: ["manual"] },
   web_research: { label: "Web research", tags: ["ai", "research"] },
 };

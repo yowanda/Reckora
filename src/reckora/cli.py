@@ -23,6 +23,7 @@ from .auth.storage import (
 from .collectors.avatar import AvatarCollector
 from .collectors.breach import BreachCollector
 from .collectors.dns_records import DNSCollector
+from .collectors.doc_leak import DocLeakCollector
 from .collectors.email import EmailCollector
 from .collectors.github_api import GitHubCollector
 from .collectors.gravatar import GravatarCollector
@@ -126,9 +127,13 @@ def _build_orchestrator(*, breach_enabled: bool = False) -> Orchestrator:
     ]
     if breach_enabled:
         # Feature-flagged opt-in: only added when --breach is set so that
-        # stock investigations never call HIBP. The collector itself
-        # additionally short-circuits to [] when ``HIBP_API_KEY`` is unset.
+        # stock investigations never call HIBP / doc-leak. The HIBP
+        # collector itself additionally short-circuits to [] when
+        # ``HIBP_API_KEY`` is unset; the doc-leak collector probes public
+        # search endpoints (no key required) so it always runs once the
+        # toggle is on.
         collectors.append(BreachCollector(api_key=settings.hibp_api_key))
+        collectors.append(DocLeakCollector())
     return Orchestrator(collectors)  # type: ignore[arg-type]
 
 
@@ -424,8 +429,11 @@ def investigate(
         typer.Option(
             "--breach",
             help=(
-                "Enable the Have I Been Pwned breach-lookup collector for "
-                "email identifiers (requires HIBP_API_KEY; off by default)."
+                "Enable the data-leak surface: HIBP breach lookup for "
+                "email identifiers (requires HIBP_API_KEY) plus a public "
+                "doc-share / paste-site probe (Scribd, pdfcoffee, "
+                "pdfslide, SlideShare, Issuu, 4shared, archive.org, "
+                "Pastebin) for username + email. Off by default."
             ),
         ),
     ] = False,

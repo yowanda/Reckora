@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from reckora.agent import AgentLoop, Researcher, ToolBudget
 from reckora.collectors.base import Collector
 from reckora.collectors.breach import BreachCollector
+from reckora.collectors.doc_leak import DocLeakCollector
 from reckora.config import settings as engine_settings
 from reckora.evidence.anchor import Anchor, anchor_traces
 from reckora.evidence.archive import Archiver, WaybackArchiver
@@ -86,6 +87,20 @@ def _build_breach_collector() -> Collector:
     return BreachCollector(api_key=engine_settings.hibp_api_key)
 
 
+def _build_doc_leak_collector() -> Collector:
+    """Construct the public-doc-leak collector for a single request.
+
+    Probed alongside HIBP under the same ``breach: true`` toggle: HIBP
+    covers structured breach corpora keyed by email, while the doc-leak
+    collector probes public document-share / paste sites for the seed
+    identifier (username + email) to surface user-uploaded leaks.
+
+    Pulled out as a module-level helper so tests can monkeypatch it
+    (mirroring ``_build_breach_collector``).
+    """
+    return DocLeakCollector()
+
+
 router = APIRouter(tags=["investigations"])
 
 
@@ -129,7 +144,9 @@ async def create_investigation(
     screenshotter: Screenshotter | None = (
         _build_screenshotter(api_settings) if payload.screenshot else None
     )
-    extra_collectors: list[Collector] = [_build_breach_collector()] if payload.breach else []
+    extra_collectors: list[Collector] = (
+        [_build_breach_collector(), _build_doc_leak_collector()] if payload.breach else []
+    )
     try:
         subject, traces, edges = await orchestrator.investigate(
             seed,

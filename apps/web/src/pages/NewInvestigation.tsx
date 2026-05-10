@@ -57,7 +57,8 @@ const TOGGLES: Array<{
   {
     label: "breach",
     key: "breach",
-    description: "Check the email/username against breach corpora.",
+    description:
+      "Check breach corpora (HIBP, email-only) + probe public doc-share / paste sites (Scribd, pdfcoffee, pdfslide, SlideShare, Issuu, 4shared, archive.org, Pastebin) for username + email.",
   },
   {
     label: "anchor",
