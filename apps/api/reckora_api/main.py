@@ -51,6 +51,8 @@ from reckora_api.mentions.routes import mentions_router
 from reckora_api.notes.routes import notes_router
 from reckora_api.pins.routes import pins_router
 from reckora_api.reactions.routes import router as reactions_router
+from reckora_api.settings import Encryptor, UserSettingsRepository
+from reckora_api.settings.routes import router as user_settings_router
 from reckora_api.todos.routes import todos_router
 from reckora_api.visits.routes import visits_router
 from reckora_api.watchers.routes import (
@@ -116,6 +118,16 @@ def create_app(
     # ``users(id)`` — those tables have to exist when we run the
     # ``CREATE TABLE`` for ``subject_owners`` / ``subject_shares``.
     app.state.access_repo = AccessRepository(s.db_path)
+    # Per-user settings (BYOK secrets) live in the same SQLite file as
+    # everything else. The Fernet key sits next to the database by
+    # default so a vanilla single-host deployment never has to hand-
+    # provision one — see ``Encryptor.from_path`` for the bootstrap
+    # contract (auto-generate + chmod 0600 on first start).
+    fernet_key_path = s.fernet_key_path or f"{s.db_path}.fernet"
+    app.state.user_settings_repo = UserSettingsRepository(
+        s.db_path,
+        Encryptor.from_path(fernet_key_path),
+    )
     app.state.orchestrator_factory = orchestrator_factory or _default_orchestrator_factory
 
     if s.cors_origins:
@@ -147,6 +159,7 @@ def create_app(
     app.include_router(notes_router, prefix="/api/v1")
     app.include_router(visits_router, prefix="/api/v1")
     app.include_router(todos_router, prefix="/api/v1")
+    app.include_router(user_settings_router, prefix="/api/v1")
 
     # Mount captured screenshots so the frontend can render them inline. The
     # directory is created lazily — the app must not crash if screenshots are

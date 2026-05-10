@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+LlmProvider = Literal["auto", "openai", "chatgpt_oauth", "agentrouter"]
 
 
 class IdentifierIn(BaseModel):
@@ -78,6 +80,16 @@ class InvestigationRequest(BaseModel):
             "Compute a cross-trace Merkle root and submit it to public "
             "OpenTimestamps calendars for tamper-evident timestamping "
             "(requires network access to the calendar fleet; off by default)."
+        ),
+    )
+    llm_provider: LlmProvider = Field(
+        default="auto",
+        description=(
+            "LLM backend used when ai=true. 'auto' (default) tries "
+            "OPENAI_API_KEY first, then ChatGPT OAuth. 'openai' / "
+            "'chatgpt_oauth' / 'agentrouter' pin the request to one "
+            "path. The AgentRouter path uses the per-user BYOK key "
+            "saved on the account, falling back to AGENTROUTER_API_KEY."
         ),
     )
 

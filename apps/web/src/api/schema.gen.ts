@@ -964,6 +964,34 @@ export interface paths {
         patch: operations["update_my_todo_api_v1_subjects__subject_id__todos_me__todo_id__patch"];
         trace?: never;
     };
+    "/api/v1/users/me/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Settings
+         * @description Return presence flags for the current user's saved settings.
+         */
+        get: operations["get_settings_api_v1_users_me_settings_get"];
+        /**
+         * Update Settings
+         * @description Save or clear the current user's BYOK secrets.
+         *
+         *     Empty string in ``agentrouter_api_key`` is the explicit "clear"
+         *     signal — it removes the encrypted ciphertext from the row but
+         *     keeps the row itself so future audit timestamps are continuous.
+         */
+        put: operations["update_settings_api_v1_users_me_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -1259,7 +1287,7 @@ export interface components {
             ai_iterations: number;
             /**
              * Ai Tools
-             * @description When ai_iterations >= 1, allow the AgentLoop's LLM to call web_search and fetch_url so it can gather evidence beyond what the rule-based collectors found. Requires OPENAI_API_KEY.
+             * @description When ai_iterations >= 1, allow the AgentLoop's LLM to call web_search and fetch_url so it can gather evidence beyond what the rule-based collectors found. Works under both OPENAI_API_KEY (chat-completions function calling) and ChatGPT OAuth (Responses-API function calling).
              * @default false
              */
             ai_tools: boolean;
@@ -1281,6 +1309,13 @@ export interface components {
              * @default false
              */
             anchor: boolean;
+            /**
+             * Llm Provider
+             * @description LLM backend used when ai=true. 'auto' (default) tries OPENAI_API_KEY first, then ChatGPT OAuth. 'openai' / 'chatgpt_oauth' / 'agentrouter' pin the request to one path. The AgentRouter path uses the per-user BYOK key saved on the account, falling back to AGENTROUTER_API_KEY.
+             * @default auto
+             * @enum {string}
+             */
+            llm_provider: "auto" | "openai" | "chatgpt_oauth" | "agentrouter";
         };
         /**
          * LabelCatalogEntry
@@ -1701,6 +1736,40 @@ export interface components {
              */
             created_at: string;
             role: components["schemas"]["Role"];
+        };
+        /**
+         * UserSettingsPublic
+         * @description Body returned by ``GET /api/v1/users/me/settings``.
+         *
+         *     Carries presence flags only — the actual API key, once written,
+         *     is opaque to the user-facing surface (the only thing the UI
+         *     needs to know is whether one is set).
+         */
+        UserSettingsPublic: {
+            /**
+             * Has Agentrouter Key
+             * @description True if the current user has saved a per-account AgentRouter API key. Used to drive the BYOK indicator in the UI.
+             * @default false
+             */
+            has_agentrouter_key: boolean;
+        };
+        /**
+         * UserSettingsUpdate
+         * @description Body for ``PUT /api/v1/users/me/settings``.
+         *
+         *     The empty string is the explicit "clear" signal so the OpenAPI
+         *     schema can describe both operations (set + clear) with a single
+         *     non-nullable field. Omitting the field on a PATCH-style call is
+         *     not supported — PUT semantics here are "send the desired full
+         *     state of the user's settings".
+         */
+        UserSettingsUpdate: {
+            /**
+             * Agentrouter Api Key
+             * @description AgentRouter (https://agentrouter.org) API key for the BYOK path. Send a non-empty string to save / replace the key, or an empty string to clear it. The plaintext value is never returned by GET endpoints; only presence is exposed.
+             * @default
+             */
+            agentrouter_api_key: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -3715,6 +3784,59 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_settings_api_v1_users_me_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettingsPublic"];
+                };
+            };
+        };
+    };
+    update_settings_api_v1_users_me_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettingsPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
