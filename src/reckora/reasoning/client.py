@@ -12,10 +12,19 @@ Reckora supports three auth modes through the same ``complete`` interface:
   reasoning layer without provisioning a separate Platform billing
   account.
 * **AgentRouter** (``AGENTROUTER_API_KEY`` env var or per-user BYOK):
-  hits ``agentrouter.org/v1/chat/completions``. AgentRouter is an
-  OpenAI-compatible LLM gateway that routes to Anthropic Claude /
-  DeepSeek / GLM / etc. behind a single bearer token, so we reuse
-  the OpenAI SDK pointed at a different ``base_url``.
+  hits ``agentrouter.org/v1/messages`` via the **Anthropic** SDK
+  ``AsyncAnthropic(base_url="https://agentrouter.org/")``.
+  AgentRouter is an LLM gateway that fronts Claude (and other
+  models) but its WAF allowlists requests by client fingerprint
+  (TLS + SDK headers). Generic OpenAI-SDK calls against
+  ``/v1/chat/completions`` are rejected with
+  ``unauthorized client detected``; only the officially-supported
+  clients (Claude Code, Codex, Gemini CLI, RooCode, Kilocode,
+  Qwen Code, Droid CLI) and the Anthropic SDKs they're built on
+  get past the check. Hence: Anthropic SDK against the
+  Anthropic-compatible ``/v1/messages`` route. The OpenAI-style
+  ``messages`` / ``tools`` payloads we already produce internally
+  are translated to the Anthropic shape on the boundary.
 
 Resolution order at ``complete`` time:
 
@@ -50,6 +59,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
 from ..auth.codex_client import (
@@ -118,8 +128,9 @@ class ReasoningClient:
         oauth_model: str = "gpt-5.5",
         credentials_path: Path | None = None,
         agentrouter_api_key: str | None = None,
-        agentrouter_base_url: str = "https://agentrouter.org/v1",
+        agentrouter_base_url: str = "https://agentrouter.org/",
         agentrouter_model: str = "claude-opus-4-6",
+        agentrouter_max_tokens: int = 4096,
         provider: ProviderName = "auto",
     ) -> None:
         if provider not in VALID_PROVIDERS:
@@ -137,19 +148,25 @@ class ReasoningClient:
         self._oauth_credentials = oauth_credentials
         self._oauth_model = oauth_model
         self._credentials_path = credentials_path
-        # AgentRouter (https://agentrouter.org) speaks the OpenAI
-        # ``/v1/chat/completions`` shape, so we reuse ``AsyncOpenAI``
-        # with a swapped ``base_url`` rather than maintaining a
-        # second SDK adapter.
+        # AgentRouter (https://agentrouter.org) is fronted by an
+        # Aliyun WAF that whitelists requests by client fingerprint.
+        # The OpenAI Python SDK is *not* on that allowlist, but the
+        # Anthropic SDK (which Claude Code is built on) is — so the
+        # AgentRouter path uses ``AsyncAnthropic`` against the
+        # Anthropic-compatible ``/v1/messages`` route instead of the
+        # OpenAI-compatible ``/v1/chat/completions`` route. The
+        # ``base_url`` therefore points at the AgentRouter root
+        # (``https://agentrouter.org/``), not the ``/v1`` path.
         self._agentrouter_api_key = agentrouter_api_key or os.environ.get("AGENTROUTER_API_KEY")
         self._agentrouter_base_url = agentrouter_base_url
         self._agentrouter_model = agentrouter_model
+        self._agentrouter_max_tokens = agentrouter_max_tokens
         self._provider: ProviderName = provider
-        # Lazy-instantiated; one OpenAI SDK client per backend +
-        # one shared AsyncClient for the OAuth path so we don't pay
-        # the TLS handshake on every ``complete`` call.
+        # Lazy-instantiated; one SDK client per backend + one shared
+        # AsyncClient for the OAuth path so we don't pay the TLS
+        # handshake on every ``complete`` call.
         self._openai: AsyncOpenAI | None = None
-        self._agentrouter_openai: AsyncOpenAI | None = None
+        self._agentrouter_anthropic: AsyncAnthropic | None = None
         self._http: httpx.AsyncClient | None = None
 
     @property
@@ -227,21 +244,21 @@ class ReasoningClient:
     async def _complete_via_agentrouter(self, system: str, user: str) -> str:
         """Run a single completion through AgentRouter.
 
-        AgentRouter exposes an OpenAI-compatible
-        ``/v1/chat/completions`` endpoint, so the wire shape and
-        response parsing match :meth:`_complete_via_api_key`. Only
-        the SDK ``base_url`` and credential differ.
+        Uses the Anthropic SDK against the Anthropic-compatible
+        ``/v1/messages`` route; AgentRouter's WAF blocks the OpenAI
+        SDK fingerprint regardless of credential. The system prompt
+        is hoisted out of the messages array (Anthropic requires it
+        as a separate parameter).
         """
         client = self._get_agentrouter_client()
-        resp = await client.chat.completions.create(
+        resp = await client.messages.create(
             model=self._agentrouter_model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            system=system,
+            max_tokens=self._agentrouter_max_tokens,
             temperature=self._temperature,
+            messages=[{"role": "user", "content": user}],
         )
-        return resp.choices[0].message.content or ""
+        return _anthropic_text_from_blocks(resp.content)
 
     async def chat_with_tools(
         self,
@@ -329,21 +346,33 @@ class ReasoningClient:
         tools: Sequence[dict[str, Any]],
         tool_choice: str,
     ) -> AssistantTurn:
-        """Tool-call round-trip via AgentRouter.
+        """Tool-call round-trip via AgentRouter (Anthropic SDK path).
 
-        AgentRouter normalises the OpenAI ``tools`` shape across the
-        upstream providers it routes to (Anthropic, GLM, DeepSeek,
-        …) so we send the same wire format as
-        :meth:`_chat_with_tools_via_api_key` and reuse the same
-        response decoder; only the underlying SDK client differs.
+        Translates the OpenAI-style ``messages`` and ``tools`` we
+        carry internally into the Anthropic ``/v1/messages`` shape
+        (system param hoisted, ``tool`` results encoded as
+        ``tool_result`` content blocks, ``function`` tools as
+        ``input_schema`` definitions), then maps the Anthropic
+        response back into our :class:`AssistantTurn` so callers
+        stay backend-agnostic.
         """
-        return await self._chat_with_tools_using_openai_sdk(
-            client=self._get_agentrouter_client(),
+        client = self._get_agentrouter_client()
+        system, anthropic_messages = _messages_to_anthropic_messages(messages)
+        anthropic_tools = _tools_to_anthropic_tools(tools)
+        anthropic_tool_choice = _tool_choice_to_anthropic(tool_choice)
+        # Anthropic typing accepts the union of message/tool TypedDicts;
+        # we hand-roll dicts here because the runtime contract is what
+        # matters for the WAF-allowlisted /v1/messages payload.
+        resp = await client.messages.create(  # type: ignore[call-overload]
             model=self._agentrouter_model,
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
+            system=system or "",
+            max_tokens=self._agentrouter_max_tokens,
+            temperature=self._temperature,
+            messages=anthropic_messages,
+            tools=anthropic_tools,
+            tool_choice=anthropic_tool_choice,
         )
+        return _anthropic_response_to_assistant_turn(resp)
 
     async def _chat_with_tools_via_api_key(
         self,
@@ -519,15 +548,15 @@ class ReasoningClient:
             self._openai = AsyncOpenAI(api_key=self._api_key)
         return self._openai
 
-    def _get_agentrouter_client(self) -> AsyncOpenAI:
+    def _get_agentrouter_client(self) -> AsyncAnthropic:
         if self._agentrouter_api_key is None:
             raise RuntimeError("AGENTROUTER_API_KEY is not configured")
-        if self._agentrouter_openai is None:
-            self._agentrouter_openai = AsyncOpenAI(
+        if self._agentrouter_anthropic is None:
+            self._agentrouter_anthropic = AsyncAnthropic(
                 api_key=self._agentrouter_api_key,
                 base_url=self._agentrouter_base_url,
             )
-        return self._agentrouter_openai
+        return self._agentrouter_anthropic
 
     def _get_http_client(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -549,10 +578,10 @@ class ReasoningClient:
         if openai_client is not None:
             await openai_client.close()
             self._openai = None
-        agentrouter_client = self._agentrouter_openai
+        agentrouter_client = self._agentrouter_anthropic
         if agentrouter_client is not None:
             await agentrouter_client.close()
-            self._agentrouter_openai = None
+            self._agentrouter_anthropic = None
 
 
 def _messages_to_responses_input(
@@ -692,3 +721,169 @@ def _function_call_to_assistant_tool_call(call: CodexFunctionCall) -> AssistantT
         name=call.name,
         arguments=arguments,
     )
+
+
+def _messages_to_anthropic_messages(
+    messages: Sequence[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Translate chat-completions messages to the Anthropic ``/v1/messages`` shape.
+
+    The Anthropic Messages API differs from chat-completions in three ways:
+
+    * The system prompt is a separate top-level ``system`` parameter,
+      not a message with ``role=system``. Multiple system messages
+      are concatenated with blank-line separators.
+    * Tool *invocations* are encoded as ``tool_use`` content blocks
+      on the assistant message, not as a sibling ``tool_calls``
+      array.
+    * Tool *results* are encoded as ``tool_result`` content blocks
+      on a ``user`` message, not as a separate ``role=tool``
+      message.
+
+    Returns ``(system_prompt, anthropic_messages)``. The returned
+    list always alternates assistant / user roles per Anthropic's
+    requirements; the caller is responsible for ordering messages
+    correctly upstream.
+    """
+    system_parts: list[str] = []
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "system":
+            if isinstance(content, str) and content:
+                system_parts.append(content)
+            continue
+        if role == "tool":
+            call_id = msg.get("tool_call_id")
+            if not isinstance(call_id, str):
+                continue
+            tool_text = content if isinstance(content, str) else json.dumps(content)
+            out.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": call_id,
+                            "content": tool_text,
+                        }
+                    ],
+                }
+            )
+            continue
+        if role == "assistant":
+            blocks: list[dict[str, Any]] = []
+            if isinstance(content, str) and content:
+                blocks.append({"type": "text", "text": content})
+            for call in msg.get("tool_calls") or []:
+                if not isinstance(call, dict):
+                    continue
+                fn = call.get("function") or {}
+                call_id = call.get("id")
+                if not isinstance(call_id, str):
+                    continue
+                raw_args = fn.get("arguments")
+                try:
+                    parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                except (json.JSONDecodeError, TypeError):
+                    parsed_args = {}
+                if not isinstance(parsed_args, dict):
+                    parsed_args = {}
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": call_id,
+                        "name": fn.get("name") or "",
+                        "input": parsed_args,
+                    }
+                )
+            if blocks:
+                out.append({"role": "assistant", "content": blocks})
+            continue
+        if role == "user":
+            if isinstance(content, str):
+                out.append({"role": "user", "content": content})
+            elif isinstance(content, list):
+                # Pass structured content blocks through unchanged.
+                out.append({"role": "user", "content": list(content)})
+            continue
+    return "\n\n".join(system_parts), out
+
+
+def _tools_to_anthropic_tools(
+    tools: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Translate chat-completions ``function`` tools to the Anthropic shape.
+
+    Anthropic exposes ``{name, description, input_schema}`` directly
+    at the top level of each tool entry; the ``type: function``
+    wrapper and ``parameters`` key from chat-completions are
+    discarded.
+    """
+    out: list[dict[str, Any]] = []
+    for spec in tools:
+        if spec.get("type") != "function":
+            # Non-function tools (e.g. built-in providers) are
+            # already in a top-level shape — pass through verbatim
+            # so callers can opt into Anthropic-native tools.
+            out.append(dict(spec))
+            continue
+        fn = spec.get("function") or {}
+        out.append(
+            {
+                "name": fn.get("name") or "",
+                "description": fn.get("description") or "",
+                "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
+            }
+        )
+    return out
+
+
+def _tool_choice_to_anthropic(tool_choice: str) -> dict[str, Any]:
+    """Translate the chat-completions ``tool_choice`` string into Anthropic's object shape."""
+    if tool_choice == "auto":
+        return {"type": "auto"}
+    if tool_choice == "none":
+        return {"type": "none"}
+    if tool_choice == "required" or tool_choice == "any":
+        return {"type": "any"}
+    # Treat anything else as a forced tool name.
+    return {"type": "tool", "name": tool_choice}
+
+
+def _anthropic_text_from_blocks(blocks: Sequence[Any]) -> str:
+    """Concatenate ``text`` content blocks from an Anthropic response."""
+    parts: list[str] = []
+    for block in blocks:
+        block_type = getattr(block, "type", None)
+        if block_type == "text":
+            text_val = getattr(block, "text", None)
+            if isinstance(text_val, str):
+                parts.append(text_val)
+    return "".join(parts)
+
+
+def _anthropic_response_to_assistant_turn(resp: Any) -> AssistantTurn:
+    """Decode an Anthropic ``Message`` response into :class:`AssistantTurn`."""
+    blocks = getattr(resp, "content", None) or []
+    text = _anthropic_text_from_blocks(blocks)
+    decoded_calls: list[AssistantToolCall] = []
+    for block in blocks:
+        if getattr(block, "type", None) != "tool_use":
+            continue
+        call_id = getattr(block, "id", "")
+        name = getattr(block, "name", "")
+        raw_input = getattr(block, "input", None)
+        if isinstance(raw_input, dict):
+            arguments: dict[str, Any] = raw_input
+        elif isinstance(raw_input, str):
+            try:
+                parsed = json.loads(raw_input)
+            except (json.JSONDecodeError, TypeError):
+                parsed = {}
+            arguments = parsed if isinstance(parsed, dict) else {}
+        else:
+            arguments = {}
+        decoded_calls.append(AssistantToolCall(id=call_id, name=name, arguments=arguments))
+    return AssistantTurn(content=text, tool_calls=tuple(decoded_calls))

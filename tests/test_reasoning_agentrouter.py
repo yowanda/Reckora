@@ -1,9 +1,13 @@
 """Tests for the AgentRouter LLM path in :class:`ReasoningClient`.
 
-AgentRouter (https://agentrouter.org) speaks the OpenAI
-``/v1/chat/completions`` shape, so we can exercise the dispatch
-logic without spinning up a fake server: an ``httpx.MockTransport``
-attached to the OpenAI SDK's underlying client is enough.
+AgentRouter (https://agentrouter.org) is fronted by an Aliyun WAF
+that allowlists requests by client fingerprint. Generic
+OpenAI-Python-SDK calls are rejected (``unauthorized client
+detected``) regardless of credential, so the AgentRouter path uses
+the **Anthropic** SDK against the Anthropic-compatible
+``/v1/messages`` route. Tests therefore mock the Anthropic wire
+shape (``system`` parameter, ``content`` block array, ``tool_use``
+blocks, etc.) rather than the OpenAI chat-completions shape.
 
 Coverage:
 
@@ -12,8 +16,10 @@ Coverage:
   returns the assistant text.
 * ``provider="agentrouter"`` raises a clear ``RuntimeError`` when no
   AgentRouter API key is configured anywhere.
-* ``chat_with_tools`` under ``provider="agentrouter"`` reuses the
-  shared OpenAI-SDK helper and decodes ``tool_calls`` correctly.
+* ``chat_with_tools`` under ``provider="agentrouter"`` translates
+  the OpenAI-style messages/tools to the Anthropic shape and
+  decodes ``tool_use`` content blocks back into
+  :class:`AssistantToolCall`.
 * ``provider="auto"`` continues to prefer ``OPENAI_API_KEY`` over
   the AgentRouter path so existing API-key deploys are untouched.
 * ``provider="openai"`` and ``provider="chatgpt_oauth"`` raise when
@@ -27,8 +33,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import anthropic
 import httpx
-import openai
 import pytest
 
 from reckora.reasoning.client import ReasoningClient, ToolsNotSupportedError
@@ -37,61 +43,72 @@ from reckora.reasoning.client import ReasoningClient, ToolsNotSupportedError
 def _make_recording_transport(
     *,
     captured: list[httpx.Request],
-    content: str = "hi from agentrouter",
-    tool_calls: list[dict[str, Any]] | None = None,
+    text: str = "hi from agentrouter",
+    tool_uses: list[dict[str, Any]] | None = None,
 ) -> httpx.MockTransport:
-    """Record every request and return one fake OpenAI chat-completion.
+    """Record every request and return one fake Anthropic Message.
 
-    The OpenAI SDK posts the model + messages on the request body;
+    The Anthropic SDK posts the model + messages on the request body;
     we echo the model back so tests can assert on the wire shape and
-    optionally include ``tool_calls`` in the assistant message to
-    drive the function-calling decoder.
+    optionally include ``tool_use`` content blocks to drive the
+    function-calling decoder.
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured.append(request)
         body = json.loads(request.content.decode("utf-8"))
-        message: dict[str, Any] = {"role": "assistant", "content": content}
-        if tool_calls is not None:
-            message["tool_calls"] = tool_calls
+        content_blocks: list[dict[str, Any]] = []
+        if text:
+            content_blocks.append({"type": "text", "text": text})
+        for tu in tool_uses or []:
+            content_blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": tu["id"],
+                    "name": tu["name"],
+                    "input": tu.get("input", {}),
+                }
+            )
         return httpx.Response(
             200,
             json={
-                "id": "chatcmpl-stub",
-                "object": "chat.completion",
-                "created": 0,
+                "id": "msg_stub",
+                "type": "message",
+                "role": "assistant",
                 "model": body["model"],
-                "choices": [
-                    {
-                        "index": 0,
-                        "finish_reason": "stop",
-                        "message": message,
-                    }
-                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "content": content_blocks,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
             },
         )
 
     return httpx.MockTransport(handler)
 
 
+def _wire_mock_anthropic(client: ReasoningClient, transport: httpx.MockTransport) -> None:
+    """Bypass lazy SDK construction by injecting a pre-built Anthropic client."""
+    http = httpx.AsyncClient(transport=transport)
+    client._agentrouter_anthropic = anthropic.AsyncAnthropic(
+        api_key="sk-byok-test",
+        base_url="https://agentrouter.example/",
+        http_client=http,
+    )
+
+
 @pytest.mark.asyncio
 async def test_provider_agentrouter_routes_through_base_url() -> None:
-    """provider='agentrouter' must hit the AgentRouter base URL with BYOK key."""
+    """provider='agentrouter' must hit the AgentRouter Messages API with BYOK key."""
     captured: list[httpx.Request] = []
-    transport = _make_recording_transport(captured=captured, content="opus says hi")
-    http = httpx.AsyncClient(transport=transport)
+    transport = _make_recording_transport(captured=captured, text="opus says hi")
     client = ReasoningClient(
         api_key=None,
         agentrouter_api_key="sk-byok-test",
-        agentrouter_base_url="https://agentrouter.example/v1",
+        agentrouter_base_url="https://agentrouter.example/",
         agentrouter_model="claude-opus-4-6",
         provider="agentrouter",
     )
-    client._agentrouter_openai = openai.AsyncOpenAI(
-        api_key="sk-byok-test",
-        base_url="https://agentrouter.example/v1",
-        http_client=http,
-    )
+    _wire_mock_anthropic(client, transport)
     try:
         out = await client.complete("system", "user")
     finally:
@@ -100,14 +117,14 @@ async def test_provider_agentrouter_routes_through_base_url() -> None:
     assert out == "opus says hi"
     assert len(captured) == 1
     req = captured[0]
-    assert str(req.url) == "https://agentrouter.example/v1/chat/completions"
-    assert req.headers["authorization"] == "Bearer sk-byok-test"
+    assert str(req.url) == "https://agentrouter.example/v1/messages"
+    assert req.headers["x-api-key"] == "sk-byok-test"
     body = json.loads(req.content.decode("utf-8"))
     assert body["model"] == "claude-opus-4-6"
-    assert body["messages"] == [
-        {"role": "system", "content": "system"},
-        {"role": "user", "content": "user"},
-    ]
+    # System prompt is hoisted out of the messages array per Anthropic's contract.
+    assert body["system"] == "system"
+    assert body["messages"] == [{"role": "user", "content": "user"}]
+    assert "max_tokens" in body  # Anthropic requires it.
 
 
 @pytest.mark.asyncio
@@ -124,36 +141,27 @@ async def test_provider_agentrouter_raises_without_key(
 
 @pytest.mark.asyncio
 async def test_provider_agentrouter_chat_with_tools_decodes_calls() -> None:
-    """Tool-call round-trip via AgentRouter must decode the response."""
+    """Tool-call round-trip via AgentRouter must decode ``tool_use`` blocks."""
     captured: list[httpx.Request] = []
-    tool_calls: list[dict[str, Any]] = [
-        {
-            "id": "call_1",
-            "type": "function",
-            "function": {
-                "name": "web_search",
-                "arguments": '{"query":"reckora"}',
-            },
-        }
-    ]
     transport = _make_recording_transport(
         captured=captured,
-        content="",
-        tool_calls=tool_calls,
+        text="",
+        tool_uses=[
+            {
+                "id": "toolu_1",
+                "name": "web_search",
+                "input": {"query": "reckora"},
+            }
+        ],
     )
-    http = httpx.AsyncClient(transport=transport)
     client = ReasoningClient(
         api_key=None,
         agentrouter_api_key="sk-byok-test",
-        agentrouter_base_url="https://agentrouter.example/v1",
+        agentrouter_base_url="https://agentrouter.example/",
         agentrouter_model="claude-opus-4-6",
         provider="agentrouter",
     )
-    client._agentrouter_openai = openai.AsyncOpenAI(
-        api_key="sk-byok-test",
-        base_url="https://agentrouter.example/v1",
-        http_client=http,
-    )
+    _wire_mock_anthropic(client, transport)
     try:
         turn = await client.chat_with_tools(
             messages=[
@@ -176,10 +184,95 @@ async def test_provider_agentrouter_chat_with_tools_decodes_calls() -> None:
 
     assert turn.content == ""
     assert len(turn.tool_calls) == 1
+    assert turn.tool_calls[0].id == "toolu_1"
     assert turn.tool_calls[0].name == "web_search"
     assert turn.tool_calls[0].arguments == {"query": "reckora"}
+
     body = json.loads(captured[0].content.decode("utf-8"))
-    assert body["tools"][0]["function"]["name"] == "web_search"
+    # System prompt hoisted; tools translated to top-level Anthropic shape.
+    assert body["system"] == "be terse"
+    assert body["messages"] == [{"role": "user", "content": "search reckora"}]
+    assert body["tools"] == [
+        {
+            "name": "web_search",
+            "description": "search the web",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+    assert body["tool_choice"] == {"type": "auto"}
+
+
+@pytest.mark.asyncio
+async def test_provider_agentrouter_chat_with_tools_round_trips_results() -> None:
+    """``tool`` results must be encoded as ``tool_result`` content blocks."""
+    captured: list[httpx.Request] = []
+    transport = _make_recording_transport(captured=captured, text="search returned 0 hits")
+    client = ReasoningClient(
+        api_key=None,
+        agentrouter_api_key="sk-byok-test",
+        agentrouter_base_url="https://agentrouter.example/",
+        agentrouter_model="claude-opus-4-6",
+        provider="agentrouter",
+    )
+    _wire_mock_anthropic(client, transport)
+    try:
+        await client.chat_with_tools(
+            messages=[
+                {"role": "system", "content": "be terse"},
+                {"role": "user", "content": "search reckora"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "toolu_42",
+                            "type": "function",
+                            "function": {
+                                "name": "web_search",
+                                "arguments": '{"query":"reckora"}',
+                            },
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "toolu_42", "content": "no hits"},
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "description": "search the web",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        )
+    finally:
+        await client.aclose()
+
+    body = json.loads(captured[0].content.decode("utf-8"))
+    # Assistant tool-calls round-trip into ``tool_use`` blocks; tool
+    # result rows fold into a ``user`` message with a ``tool_result``
+    # block referencing the same id.
+    assistant_msg = body["messages"][1]
+    assert assistant_msg["role"] == "assistant"
+    assert assistant_msg["content"] == [
+        {
+            "type": "tool_use",
+            "id": "toolu_42",
+            "name": "web_search",
+            "input": {"query": "reckora"},
+        }
+    ]
+    tool_result_msg = body["messages"][2]
+    assert tool_result_msg["role"] == "user"
+    assert tool_result_msg["content"] == [
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_42",
+            "content": "no hits",
+        }
+    ]
 
 
 @pytest.mark.asyncio
