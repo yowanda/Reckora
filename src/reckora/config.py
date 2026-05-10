@@ -73,8 +73,13 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="AGENTROUTER_API_KEY",
     )
+    # AgentRouter's WAF only accepts the Anthropic SDK fingerprint (see
+    # ReasoningClient docstring), so the base URL is the *root* of the
+    # service -- the Anthropic client appends ``/v1/messages`` itself.
+    # Keep this trailing-slash form: ``https://agentrouter.org/v1`` would
+    # double to ``/v1/v1/messages`` and 404.
     agentrouter_base_url: str = Field(
-        default="https://agentrouter.org/v1",
+        default="https://agentrouter.org/",
         validation_alias="RECKORA_AGENTROUTER_BASE_URL",
     )
     # Hardcoded default uses Anthropic's Claude Opus 4.6 alias as exposed by

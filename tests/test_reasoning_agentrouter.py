@@ -331,3 +331,40 @@ def test_invalid_provider_raises_eagerly() -> None:
     """Unknown provider name must surface at construction time."""
     with pytest.raises(ValueError, match="unknown provider"):
         ReasoningClient(provider="not-a-real-provider")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        "https://agentrouter.org/",
+        "https://agentrouter.org",
+        "https://agentrouter.org/v1",
+        "https://agentrouter.org/v1/",
+    ],
+)
+@pytest.mark.asyncio
+async def test_agentrouter_base_url_strips_legacy_v1_suffix(configured: str) -> None:
+    """Stale ``.../v1`` base URLs (carry-overs from the OpenAI-SDK path)
+    must resolve to the same endpoint as the bare root, otherwise the
+    Anthropic SDK appends ``/v1/messages`` and the request 404s with
+    ``Invalid URL (POST /v1/v1/messages)``."""
+    captured: list[httpx.Request] = []
+    transport = _make_recording_transport(captured=captured, text="ok")
+    client = ReasoningClient(
+        api_key=None,
+        agentrouter_api_key="sk-byok-test",
+        agentrouter_base_url=configured,
+        agentrouter_model="claude-opus-4-6",
+        provider="agentrouter",
+    )
+    # Wire a manually-built Anthropic client that exercises the same
+    # ``/v1`` coercion the lazy constructor would apply.
+    client._agentrouter_anthropic = None
+    real_client = client._get_agentrouter_client()
+    real_client._client = httpx.AsyncClient(transport=transport)
+    try:
+        await client.complete("system", "user")
+    finally:
+        await client.aclose()
+
+    assert str(captured[0].url) == "https://agentrouter.org/v1/messages"
