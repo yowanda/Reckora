@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 import typer
 
 from . import __version__
@@ -51,6 +54,11 @@ from .persistence import SQLiteSubjectRepository
 from .reasoning.client import ReasoningClient
 from .reasoning.hypothesize import hypothesize
 from .reasoning.summarize import summarize
+from .reasoning.web_search import (
+    WebSearchFn,
+    WebSearchUnavailableError,
+    make_web_search_fn,
+)
 from .reports.html import to_dossier_html
 from .reports.json_export import to_dossier_json
 from .reports.markdown import to_dossier_md
@@ -105,7 +113,11 @@ def _identifier_from(value: str, kind: str | None) -> Identifier:
     return Identifier(type=identifier_type, value=stripped)
 
 
-def _build_orchestrator(*, breach_enabled: bool = False) -> Orchestrator:
+def _build_orchestrator(
+    *,
+    breach_enabled: bool = False,
+    web_search_fn: WebSearchFn | None = None,
+) -> Orchestrator:
     collectors: list[object] = [
         GitHubCollector(token=settings.github_token),
         HackerNewsCollector(),
@@ -133,7 +145,14 @@ def _build_orchestrator(*, breach_enabled: bool = False) -> Orchestrator:
         # search endpoints (no key required) so it always runs once the
         # toggle is on.
         collectors.append(BreachCollector(api_key=settings.hibp_api_key))
-        collectors.append(DocLeakCollector())
+        # When a web-search backend is wired in, eight of the doc-leak
+        # platforms (scribd, slideshare, issuu, 4shared, calameo,
+        # docplayer, dokumen.tips, anyflip) route through OpenAI's
+        # web_search tool instead of scraping their own SPA/anti-bot
+        # search pages. Without it those platforms emit ``unverified``
+        # traces — the four direct-probe sites (archive.org, pdfcoffee,
+        # yumpu, pastebin) keep working unchanged.
+        collectors.append(DocLeakCollector(web_search_fn=web_search_fn))
     return Orchestrator(collectors)  # type: ignore[arg-type]
 
 
@@ -243,6 +262,40 @@ def _build_screenshotter(output_dir: Path) -> Screenshotter:
     return PlaywrightScreenshotter(output_dir=output_dir)
 
 
+@asynccontextmanager
+async def _web_search_backend(*, enabled: bool) -> AsyncIterator[WebSearchFn | None]:
+    """Resolve a :data:`WebSearchFn` from settings + on-disk OAuth creds.
+
+    Yields ``None`` when the caller hasn't opted in (``enabled=False``)
+    or no credential is available. The DocLeakCollector consumes
+    ``None`` by emitting ``unverified`` traces for the SPA / anti-bot
+    platforms, so the rest of the investigation still completes.
+
+    Owns an :class:`httpx.AsyncClient` for the lifetime of the
+    investigation so connections to ``api.openai.com`` /
+    ``chatgpt.com`` can be reused across the eight per-platform probes.
+    """
+    if not enabled:
+        yield None
+        return
+    api_key = settings.openai_api_key or None
+    creds = load_credentials()
+    if not api_key and creds is None:
+        yield None
+        return
+    async with httpx.AsyncClient() as client:
+        try:
+            fn = make_web_search_fn(
+                client=client,
+                api_key=api_key,
+                oauth_credentials=creds,
+            )
+        except WebSearchUnavailableError:
+            yield None
+            return
+        yield fn
+
+
 async def _run(
     seed: Identifier,
     extras: list[Identifier],
@@ -255,13 +308,21 @@ async def _run(
     ai_tools: bool = False,
     ai_tool_calls: int = 8,
 ) -> tuple[Subject, list[Trace], list[Edge], str | None, str | None, Anchor | None]:
-    orchestrator = _build_orchestrator(breach_enabled=breach_enabled)
-    subject, traces, edges = await orchestrator.investigate(
-        seed,
-        extra_identifiers=extras,
-        archiver=archiver,
-        screenshotter=screenshotter,
-    )
+    # Reuse the existing auth chain (Platform API key > ChatGPT OAuth) for
+    # the doc-leak collector's web-search backend. We only need it when
+    # --breach is on; the helper short-circuits to ``None`` otherwise so
+    # the orchestrator path is unchanged for stock investigations.
+    async with _web_search_backend(enabled=breach_enabled) as web_search_fn:
+        orchestrator = _build_orchestrator(
+            breach_enabled=breach_enabled,
+            web_search_fn=web_search_fn,
+        )
+        subject, traces, edges = await orchestrator.investigate(
+            seed,
+            extra_identifiers=extras,
+            archiver=archiver,
+            screenshotter=screenshotter,
+        )
 
     anchor: Anchor | None = None
     if anchor_enabled:
