@@ -65,7 +65,41 @@ class APISettings(BaseSettings):
         validation_alias="RECKORA_API_FERNET_KEY_PATH",
     )
 
+    # ---- OAuth (social login) ----
+    # When ``RECKORA_API_OAUTH_GITHUB_CLIENT_ID`` is empty the OAuth
+    # routes return 503; deployments that don't want social login can
+    # leave every OAuth setting unset and the rest of the API still
+    # works.
+    oauth_github_client_id: str = Field(
+        default="",
+        validation_alias="RECKORA_API_OAUTH_GITHUB_CLIENT_ID",
+    )
+    oauth_github_client_secret: str = Field(
+        default="",
+        validation_alias="RECKORA_API_OAUTH_GITHUB_CLIENT_SECRET",
+    )
+    # The redirect URI registered with the GitHub OAuth App. Must
+    # point at ``<api>/api/v1/auth/oauth/github/callback`` — anything
+    # else will be rejected by GitHub at the authorize step.
+    oauth_github_redirect_url: str = Field(
+        default="http://localhost:8000/api/v1/auth/oauth/github/callback",
+        validation_alias="RECKORA_API_OAUTH_GITHUB_REDIRECT_URL",
+    )
+    # Base URL the OAuth callback redirects the browser to once a JWT
+    # has been minted. We hand off the token via the URL fragment so
+    # it never appears in the API's access log. Defaults to the Vite
+    # dev server origin for local development.
+    frontend_url: str = Field(
+        default="http://localhost:5173",
+        validation_alias="RECKORA_API_FRONTEND_URL",
+    )
+
     @property
     def cors_origins(self) -> list[str]:
         """Parse the comma-separated origin list once."""
         return [o.strip() for o in self.cors_origins_raw.split(",") if o.strip()]
+
+    @property
+    def github_oauth_enabled(self) -> bool:
+        """``True`` iff both client id and secret are configured."""
+        return bool(self.oauth_github_client_id and self.oauth_github_client_secret)

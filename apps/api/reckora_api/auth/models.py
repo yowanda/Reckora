@@ -91,3 +91,7 @@ class UserRecord(BaseModel):
     created_at: datetime
     is_active: bool
     role: Role
+    # Numeric GitHub user id (``id`` field in ``GET /user``), set for
+    # accounts that signed in through the GitHub OAuth flow. ``None``
+    # for password-only and CLI-bootstrapped accounts.
+    github_id: int | None = None

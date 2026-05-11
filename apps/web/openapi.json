@@ -6,6 +6,28 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/v1/auth/oauth/providers": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "List Oauth Providers",
+        "description": "Advertise the OAuth providers wired into this deployment.",
+        "operationId": "list_oauth_providers_api_v1_auth_oauth_providers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthProvidersPublic"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/register": {
       "post": {
         "tags": [
@@ -118,6 +140,165 @@
             "OAuth2PasswordBearer": []
           }
         ]
+      }
+    },
+    "/api/v1/auth/oauth/github/login": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Github Login",
+        "description": "Kick off the GitHub OAuth flow.",
+        "operationId": "github_login_api_v1_auth_oauth_github_login_get",
+        "parameters": [
+          {
+            "name": "next",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "307": {
+            "description": "redirect to github authorize"
+          },
+          "503": {
+            "description": "github oauth not configured"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oauth/github/callback": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Github Callback",
+        "description": "Handle GitHub's redirect back, then send the browser to the SPA.",
+        "operationId": "github_callback_api_v1_auth_oauth_github_callback_get",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            }
+          },
+          {
+            "name": "error_description",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error Description"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "307": {
+            "description": "redirect to frontend with token in fragment"
+          },
+          "400": {
+            "description": "invalid state, code, or oauth_error"
+          },
+          "503": {
+            "description": "github oauth not configured"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/users": {
@@ -3562,6 +3743,21 @@
         ],
         "title": "NoteUpsert",
         "description": "Body for ``PUT /api/v1/subjects/{id}/notes/me``."
+      },
+      "OAuthProvidersPublic": {
+        "properties": {
+          "github": {
+            "type": "boolean",
+            "title": "Github"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "github"
+        ],
+        "title": "OAuthProvidersPublic",
+        "description": "Which third-party login providers the server currently advertises.\n\nThe SPA fetches this anonymously on the login page so it can show\nonly the buttons whose providers are actually configured \u2014 there's\nno point rendering \"Sign in with GitHub\" if the operator has not\nset the GitHub client id and secret."
       },
       "ReactionGroup": {
         "properties": {

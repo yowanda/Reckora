@@ -7,6 +7,7 @@ import { MembersPage } from "@/pages/Members";
 import { MentionsPage } from "@/pages/Mentions";
 import { NewInvestigationPage } from "@/pages/NewInvestigation";
 import { NotFoundPage } from "@/pages/NotFound";
+import { OAuthCallbackPage } from "@/pages/OAuthCallback";
 import { PinsPage } from "@/pages/PinsPage";
 import { SubjectDetailPage } from "@/pages/SubjectDetail";
 import { SubjectsListPage } from "@/pages/SubjectsList";
@@ -16,6 +17,7 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/auth/callback" element={<OAuthCallbackPage />} />
       <Route element={<PrivateRoute />}>
         <Route element={<Layout />}>
           <Route index element={<Navigate to="/subjects" replace />} />

@@ -29,3 +29,16 @@ def verify_password(plain: str, hashed: str) -> bool:
         return bcrypt.checkpw(_prepare(plain), hashed.encode("ascii"))
     except (ValueError, TypeError):
         return False
+
+
+# Sentinel stored in ``users.password_hash`` for accounts that signed
+# up via OAuth and therefore have no password. The leading ``!`` is
+# not a valid bcrypt prefix, so :func:`verify_password` rejects every
+# input against it — the password grant on ``POST /auth/token``
+# cannot accidentally log an OAuth-only user in.
+UNUSABLE_PASSWORD_HASH = "!oauth"
+
+
+def make_unusable_password_hash() -> str:
+    """Return the sentinel stored for OAuth-only accounts."""
+    return UNUSABLE_PASSWORD_HASH

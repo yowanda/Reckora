@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS users(
     password_hash TEXT NOT NULL,
     created_at TEXT NOT NULL,
     is_active INTEGER NOT NULL DEFAULT 1,
-    role TEXT NOT NULL DEFAULT 'viewer'
+    role TEXT NOT NULL DEFAULT 'viewer',
+    github_id INTEGER UNIQUE
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
@@ -49,6 +50,7 @@ class UserRepository:
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.executescript(_SCHEMA)
         self._migrate_role_column()
+        self._migrate_github_id_column()
         self._conn.commit()
 
     def _migrate_role_column(self) -> None:
@@ -63,6 +65,21 @@ class UserRepository:
         cols = {row[1] for row in self._conn.execute("PRAGMA table_info(users)").fetchall()}
         if "role" not in cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'")
+
+    def _migrate_github_id_column(self) -> None:
+        """Add the ``github_id`` column to pre-OAuth users tables.
+
+        SQLite refuses ``ALTER TABLE ... ADD COLUMN ... UNIQUE``, so we add
+        the column nullable and enforce uniqueness via a partial index
+        that ignores the (overwhelmingly common) ``NULL`` rows.
+        """
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "github_id" not in cols:
+            self._conn.execute("ALTER TABLE users ADD COLUMN github_id INTEGER")
+            self._conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_github_id "
+                "ON users(github_id) WHERE github_id IS NOT NULL"
+            )
 
     def close(self) -> None:
         self._conn.close()
@@ -84,14 +101,16 @@ class UserRepository:
         username: str,
         password_hash: str,
         role: Role = Role.VIEWER,
+        github_id: int | None = None,
     ) -> UserRecord:
         ts = datetime.now(UTC).isoformat()
         cur = self._conn.execute(
             """
-            INSERT INTO users (username, password_hash, created_at, is_active, role)
-            VALUES (?, ?, ?, 1, ?)
+            INSERT INTO users
+                (username, password_hash, created_at, is_active, role, github_id)
+            VALUES (?, ?, ?, 1, ?, ?)
             """,
-            (username, password_hash, ts, role.value),
+            (username, password_hash, ts, role.value, github_id),
         )
         self._conn.commit()
         user_id = cur.lastrowid
@@ -104,6 +123,7 @@ class UserRepository:
             created_at=datetime.fromisoformat(ts),
             is_active=True,
             role=role,
+            github_id=github_id,
         )
 
     def set_role(self, user_id: int, role: Role) -> UserRecord | None:
@@ -131,7 +151,7 @@ class UserRepository:
         """
         rows = self._conn.execute(
             """
-            SELECT id, username, password_hash, created_at, is_active, role
+            SELECT id, username, password_hash, created_at, is_active, role, github_id
             FROM users ORDER BY id ASC
             """
         ).fetchall()
@@ -140,7 +160,7 @@ class UserRepository:
     def get_by_username(self, username: str) -> UserRecord | None:
         row = self._conn.execute(
             """
-            SELECT id, username, password_hash, created_at, is_active, role
+            SELECT id, username, password_hash, created_at, is_active, role, github_id
             FROM users WHERE username = ?
             """,
             (username,),
@@ -150,15 +170,33 @@ class UserRepository:
     def get_by_id(self, user_id: int) -> UserRecord | None:
         row = self._conn.execute(
             """
-            SELECT id, username, password_hash, created_at, is_active, role
+            SELECT id, username, password_hash, created_at, is_active, role, github_id
             FROM users WHERE id = ?
             """,
             (user_id,),
         ).fetchone()
         return _row_to_record(row)
 
+    def get_by_github_id(self, github_id: int) -> UserRecord | None:
+        """Look up a user by their numeric GitHub id.
 
-def _row_to_record(row: tuple[int, str, str, str, int, str] | None) -> UserRecord | None:
+        The OAuth callback calls this first so a returning user with the
+        same GitHub account always lands on the same Reckora row, even if
+        they later changed their GitHub login (handle).
+        """
+        row = self._conn.execute(
+            """
+            SELECT id, username, password_hash, created_at, is_active, role, github_id
+            FROM users WHERE github_id = ?
+            """,
+            (github_id,),
+        ).fetchone()
+        return _row_to_record(row)
+
+
+def _row_to_record(
+    row: tuple[int, str, str, str, int, str, int | None] | None,
+) -> UserRecord | None:
     if row is None:
         return None
     return UserRecord(
@@ -168,4 +206,5 @@ def _row_to_record(row: tuple[int, str, str, str, int, str] | None) -> UserRecor
         created_at=datetime.fromisoformat(row[3]),
         is_active=bool(row[4]),
         role=Role(row[5]),
+        github_id=row[6],
     )
