@@ -6,37 +6,66 @@ is the data-leak surface adjacent to HIBP (which only covers structured
 breach corpora) — it catches documents accidentally uploaded to public
 hosts that contain credentials, contact info, or other PII.
 
-Sites probed (search endpoints, no auth required):
+Sites probed:
 
-- scribd.com — user-uploaded books / docs
-- pdfcoffee.com — PDF hosting
-- pdfslide.net — PDF / slide hosting
-- slideshare.net — presentations (LinkedIn-owned)
-- issuu.com — magazines / brochures
-- 4shared.com — generic file hosting
-- archive.org — Internet Archive full-text search (JSON endpoint)
-- pastebin.com — paste hosting (username profile page; usernames only)
+Direct (no third-party search backend required):
+
+- archive.org — Internet Archive full-text search (``advancedsearch.php``
+  JSON endpoint; stable, deterministic, no anti-bot)
+- pdfcoffee.com — PDF hosting (returns hit URLs in initial HTML)
+- yumpu.com — magazine / flipbook hosting (returns hit URLs in HTML)
+- pastebin.com — paste hosting via the public ``/u/<username>`` profile
+  page (usernames only — pastebin has no free full-text search)
+
+Via OpenAI Responses ``web_search`` tool (see
+:mod:`reckora.reasoning.web_search`). These sites all gate their own
+search behind a JavaScript SPA shell or a Cloudflare anti-bot
+interstitial, so direct ``httpx.get`` returns zero hits even when the
+platform clearly has the content. We delegate the search to OpenAI's
+``web_search_preview`` tool (using whichever credential is configured —
+Platform API key or ChatGPT OAuth) and anchor each returned URL against
+the platform's canonical path regex.
+
+- scribd.com — SPA shell on ``/search``
+- slideshare.net — anti-bot interstitial
+- issuu.com — SPA shell
+- 4shared.com — search subdomain redirects to login wall
+- dokumen.tips — Cloudflare 403 on ``/search/``
+- calameo.com — 403 on ``/search``
+- docplayer.net — anti-bot / regional DNS
+- anyflip.com — no public ``/search`` endpoint
+
+The ``pdfslide.net`` adapter was removed in this revision: the domain
+now redirects to an ad-injecting third-party site
+(``xoilaciiq.cc``) that no longer hosts the indexed PDFs, so emitting
+traces against it produced false signal in dossiers.
 
 For each site we emit one :class:`Trace`. The schema for ``Trace.fields``:
 
 - ``platform`` — short site identifier (``"scribd"``, ``"pdfcoffee"``, …)
-- ``query`` — canonicalised seed value used in the search URL
+- ``query`` — canonicalised seed value used in the search query
 - ``identifier_kind`` — ``"username"`` or ``"email"``
-- ``search_url`` — exact URL we queried
+- ``search_url`` — the platform's *user-facing* search URL (for
+  analyst click-through verification), even when the probe ran via
+  the LLM web-search tool. The transport-level URL we actually fetched
+  is captured in ``evidence_marker``.
 - ``presence_status`` — one of:
 
   * ``"exists"`` — at least one hit URL was parsed out of the response
-  * ``"not_found"`` — the server replied cleanly with zero hits
-  * ``"blocked"`` — the server refused us (HTTP 4xx/5xx, transport error,
-    or anti-bot interstitial); presence cannot be inferred
+  * ``"not_found"`` — the server / search backend replied cleanly with
+    zero hits
+  * ``"blocked"`` — the server refused us (HTTP 4xx/5xx, transport
+    error, or anti-bot interstitial); presence cannot be inferred
   * ``"unverified"`` — server replied 200 but we couldn't determine a
-    hit count from the body (e.g. SPA shell, missing markers)
+    hit count from the body (e.g. SPA shell, missing markers, or no
+    web-search backend was configured for an SPA-only site)
 
-- ``http_status`` — observed status code (``None`` on transport error)
+- ``http_status`` — observed status code (``None`` on transport error /
+  on web-search-routed sites where there is no per-platform HTTP call)
 - ``hit_count`` — number of hit URLs parsed (capped at 50)
 - ``hits`` — sample of up to 5 hits (``[{"url": ..., "title": ...}]``)
 - ``evidence_marker`` — short triage string explaining why we picked
-  the status (e.g. ``"scribd: 14 documents matched"``).
+  the status (e.g. ``"scribd: 14 documents matched (via web_search)"``).
 
 Like :class:`SocialPresenceProbeCollector`, we always emit one trace per
 platform — even on ``not_found`` / ``blocked`` — so the dossier records
@@ -60,6 +89,7 @@ import httpx
 from ..evidence.chain import make_evidence
 from ..models.entity import Identifier, Trace
 from ..models.enums import IdentifierType, TraceSource
+from ..reasoning.web_search import WebSearchError, WebSearchFn, WebSearchHit
 from .base import Collector
 
 _BROWSER_UA = (
@@ -74,16 +104,17 @@ _BROWSER_UA = (
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9._\-]{1,64}$")
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,255}\.[A-Za-z]{2,24}$")
 
-# Per-platform regex of the "hit URL" pattern we look for in the
-# search-results body. Each pattern is anchored on the site's own
-# canonical path shape so hits are confidently from that site, not
-# advertisements or unrelated outbound links. Captures the URL.
+# Per-platform regex of the "hit URL" pattern we look for in either
+# the search-results body (direct probe) or the web-search citations
+# (LLM-routed probe). Each pattern is anchored on the site's own
+# canonical path shape so we only count URLs that genuinely live on
+# that domain — ad/affiliate redirects coming back from the LLM tool
+# get filtered out.
 _HIT_PATTERNS: dict[str, re.Pattern[str]] = {
     "scribd": re.compile(
         r"https?://(?:www\.)?scribd\.com/(?:document|presentation)/\d+/[A-Za-z0-9_\-]+"
     ),
     "pdfcoffee": re.compile(r"https?://pdfcoffee\.com/[A-Za-z0-9_\-]+\.html"),
-    "pdfslide": re.compile(r"https?://pdfslide\.net/[A-Za-z0-9_\-]+/[A-Za-z0-9_\-]+\.html"),
     "slideshare": re.compile(
         r"https?://(?:www\.)?slideshare\.net/(?:slideshow/)?[A-Za-z0-9_\-]+/[A-Za-z0-9_\-]+"
     ),
@@ -92,6 +123,13 @@ _HIT_PATTERNS: dict[str, re.Pattern[str]] = {
         r"https?://(?:www\.)?4shared\.com/(?:document|file|account|web|s)/[A-Za-z0-9_\-/]+\.html"
     ),
     "pastebin": re.compile(r"https?://pastebin\.com/[A-Za-z0-9]{8}\b"),
+    "yumpu": re.compile(
+        r"https?://(?:www\.)?yumpu\.com/[a-z]{2}/document/(?:view|read)/\d+/[A-Za-z0-9_\-]+"
+    ),
+    "calameo": re.compile(r"https?://(?:[a-z]{2}\.|www\.)?calameo\.com/(?:books|read)/[0-9a-f]+"),
+    "docplayer": re.compile(r"https?://docplayer\.net/\d+-[A-Za-z0-9_\-]+\.html"),
+    "dokumen_tips": re.compile(r"https?://dokumen\.tips/documents/[A-Za-z0-9_\-]+\.html"),
+    "anyflip": re.compile(r"https?://anyflip\.com/[A-Za-z0-9]{4,8}/[A-Za-z0-9]{4,8}/?"),
 }
 
 # Per-platform extractor for a short title near the hit URL. Best-effort:
@@ -103,6 +141,36 @@ _ANCHOR_RE = re.compile(r"<a\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>([^<]{1,200})</
 # Maximum number of hits we surface per platform. Picked to keep dossier
 # JSON payloads bounded — analysts who need more can click through.
 _MAX_HITS = 5
+
+# Cap on how many citations to request from the LLM web-search backend
+# per platform. Larger than ``_MAX_HITS`` so the per-domain regex has
+# room to filter ad / affiliate URLs without starving the final list.
+_WEB_SEARCH_LIMIT = 12
+
+# Sites whose user-facing search URL is recorded as ``search_url`` for
+# analysts. The keys are the platform tokens used in the trace; the
+# values are format strings that take a single positional argument
+# (the URL-encoded query). These URLs are *not* fetched directly when
+# the collector routes via web search — they're surfaced so an analyst
+# can re-run the search in a browser and confirm the LLM-routed hits.
+_PLATFORM_SEARCH_URL: dict[str, str] = {
+    "scribd": "https://www.scribd.com/search?query={0}",
+    "slideshare": "https://www.slideshare.net/search?q={0}",
+    "issuu": "https://issuu.com/search?q={0}",
+    "4shared": "https://search.4shared.com/q/CCAD/1/{0}",
+    "calameo": "https://www.calameo.com/search?q={0}",
+    "docplayer": "https://docplayer.net/search/?q={0}",
+    "dokumen_tips": "https://dokumen.tips/search/?q={0}",
+    "anyflip": "https://anyflip.com/search?q={0}",
+}
+
+# Direct-probe URL builders. These run a plain ``httpx.get`` and parse
+# the body with the per-platform regex.
+_DIRECT_PROBE_URL: dict[str, str] = {
+    "pdfcoffee": "https://pdfcoffee.com/?s={0}",
+    "yumpu": "https://www.yumpu.com/en/search?q={0}",
+    "pastebin": "https://pastebin.com/u/{0}",
+}
 
 
 class DocLeakCollector(Collector):
@@ -116,6 +184,12 @@ class DocLeakCollector(Collector):
     timeout:
         Per-site timeout in seconds. Each adapter has the same budget
         and they fan out concurrently via ``asyncio.gather``.
+    web_search_fn:
+        Optional :data:`WebSearchFn` used to query SPA / anti-bot
+        platforms via OpenAI's ``web_search_preview`` tool. When unset
+        those platforms emit an ``unverified`` trace explaining the
+        missing backend; direct-probe platforms (archive.org,
+        pdfcoffee, yumpu, pastebin) keep working without it.
     """
 
     name: ClassVar[str] = "doc_leak"
@@ -128,9 +202,11 @@ class DocLeakCollector(Collector):
         client: httpx.AsyncClient | None = None,
         *,
         timeout: float = 12.0,
+        web_search_fn: WebSearchFn | None = None,
     ) -> None:
         super().__init__(client)
         self._timeout = timeout
+        self._web_search_fn = web_search_fn
 
     async def collect(self, identifier: Identifier) -> list[Trace]:
         if not self.supports(identifier):
@@ -151,16 +227,20 @@ class DocLeakCollector(Collector):
         client = await self._http()
 
         # All adapters share the same shape:
-        # async def adapter(client, query, kind) -> SiteResult
+        # async def adapter(client, query, kind) -> AdapterResult
         # We fan them out, then materialise traces from the results.
-        adapters = [
-            self._probe_scribd,
+        adapters: list[Any] = [
+            self._probe_archive_org,
             self._probe_pdfcoffee,
-            self._probe_pdfslide,
+            self._probe_yumpu,
+            self._probe_scribd,
             self._probe_slideshare,
             self._probe_issuu,
             self._probe_4shared,
-            self._probe_archive_org,
+            self._probe_calameo,
+            self._probe_docplayer,
+            self._probe_dokumen_tips,
+            self._probe_anyflip,
         ]
         # Pastebin only has a useful per-site lookup for usernames (their
         # profile page); skip it for email queries.
@@ -186,44 +266,19 @@ class DocLeakCollector(Collector):
             )
         return traces
 
-    # ---------------------------------------------------------------- adapters
-
-    async def _probe_scribd(
-        self, client: httpx.AsyncClient, query: str, kind: str
-    ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
-        url = f"https://www.scribd.com/search?query={quote_plus(query)}"
-        return await self._html_search(client, url, query=query, kind=kind, platform="scribd")
+    # ---------------------------------------------------------------- direct probes
 
     async def _probe_pdfcoffee(
         self, client: httpx.AsyncClient, query: str, kind: str
     ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
-        url = f"https://pdfcoffee.com/?s={quote_plus(query)}"
+        url = _DIRECT_PROBE_URL["pdfcoffee"].format(quote_plus(query))
         return await self._html_search(client, url, query=query, kind=kind, platform="pdfcoffee")
 
-    async def _probe_pdfslide(
+    async def _probe_yumpu(
         self, client: httpx.AsyncClient, query: str, kind: str
     ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
-        url = f"https://pdfslide.net/search?q={quote_plus(query)}"
-        return await self._html_search(client, url, query=query, kind=kind, platform="pdfslide")
-
-    async def _probe_slideshare(
-        self, client: httpx.AsyncClient, query: str, kind: str
-    ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
-        url = f"https://www.slideshare.net/search?q={quote_plus(query)}"
-        return await self._html_search(client, url, query=query, kind=kind, platform="slideshare")
-
-    async def _probe_issuu(
-        self, client: httpx.AsyncClient, query: str, kind: str
-    ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
-        url = f"https://issuu.com/search?q={quote_plus(query)}"
-        return await self._html_search(client, url, query=query, kind=kind, platform="issuu")
-
-    async def _probe_4shared(
-        self, client: httpx.AsyncClient, query: str, kind: str
-    ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
-        # 4shared's public search reachable via the dedicated subdomain.
-        url = f"https://search.4shared.com/q/CCAD/1/{quote_plus(query)}"
-        return await self._html_search(client, url, query=query, kind=kind, platform="4shared")
+        url = _DIRECT_PROBE_URL["yumpu"].format(quote_plus(query))
+        return await self._html_search(client, url, query=query, kind=kind, platform="yumpu")
 
     async def _probe_pastebin(
         self, client: httpx.AsyncClient, query: str, kind: str
@@ -232,7 +287,7 @@ class DocLeakCollector(Collector):
         # the public ``/u/<username>`` profile reveals whether a user
         # account exists and lists recent public pastes — a useful
         # surrogate for "this username has a known paste history".
-        url = f"https://pastebin.com/u/{quote_plus(query)}"
+        url = _DIRECT_PROBE_URL["pastebin"].format(quote_plus(query))
         return await self._html_search(client, url, query=query, kind=kind, platform="pastebin")
 
     async def _probe_archive_org(
@@ -367,7 +422,146 @@ class DocLeakCollector(Collector):
             evidence_payload,
         )
 
+    # ---------------------------------------------------------------- web-search probes
+
+    async def _probe_scribd(
+        self, client: httpx.AsyncClient, query: str, kind: str
+    ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+        return await self._web_search_probe(query=query, kind=kind, platform="scribd")
+
+    async def _probe_slideshare(
+        self, client: httpx.AsyncClient, query: str, kind: str
+    ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+        return await self._web_search_probe(query=query, kind=kind, platform="slideshare")
+
+    async def _probe_issuu(
+        self, client: httpx.AsyncClient, query: str, kind: str
+    ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+        return await self._web_search_probe(query=query, kind=kind, platform="issuu")
+
+    async def _probe_4shared(
+        self, client: httpx.AsyncClient, query: str, kind: str
+    ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+        return await self._web_search_probe(query=query, kind=kind, platform="4shared")
+
+    async def _probe_calameo(
+        self, client: httpx.AsyncClient, query: str, kind: str
+    ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+        return await self._web_search_probe(query=query, kind=kind, platform="calameo")
+
+    async def _probe_docplayer(
+        self, client: httpx.AsyncClient, query: str, kind: str
+    ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+        return await self._web_search_probe(query=query, kind=kind, platform="docplayer")
+
+    async def _probe_dokumen_tips(
+        self, client: httpx.AsyncClient, query: str, kind: str
+    ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+        return await self._web_search_probe(query=query, kind=kind, platform="dokumen_tips")
+
+    async def _probe_anyflip(
+        self, client: httpx.AsyncClient, query: str, kind: str
+    ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+        return await self._web_search_probe(query=query, kind=kind, platform="anyflip")
+
     # --------------------------------------------------------------- shared
+
+    async def _web_search_probe(
+        self,
+        *,
+        query: str,
+        kind: str,
+        platform: str,
+    ) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+        """Run ``site:<domain> "<query>"`` via the LLM web-search tool.
+
+        Validates returned URL citations against the platform's
+        :data:`_HIT_PATTERNS` regex so we only count URLs that genuinely
+        live on the target domain. When no web-search backend is wired
+        up (``web_search_fn is None``) we emit an ``unverified`` trace
+        rather than fail the whole collector — the trace records that
+        the platform was considered and explains why it wasn't probed.
+        """
+        canonical = _platform_search_url(platform, query)
+        evidence_url = canonical or f"web_search://{platform}?q={quote_plus(query)}"
+        if self._web_search_fn is None:
+            return (
+                _make_fields(
+                    platform=platform,
+                    query=query,
+                    kind=kind,
+                    search_url=canonical,
+                    presence_status="unverified",
+                    http_status=None,
+                    hit_count=0,
+                    hits=[],
+                    evidence_marker=f"{platform}: no web-search backend configured",
+                ),
+                evidence_url,
+                {"backend": "none"},
+            )
+
+        domain = _platform_domain(platform)
+        dorked = f'site:{domain} "{query}"'
+        try:
+            citations = await self._web_search_fn(dorked)
+        except WebSearchError as exc:
+            return (
+                _make_fields(
+                    platform=platform,
+                    query=query,
+                    kind=kind,
+                    search_url=canonical,
+                    presence_status="blocked",
+                    http_status=None,
+                    hit_count=0,
+                    hits=[],
+                    evidence_marker=f"{platform}: web_search backend error ({exc})",
+                ),
+                evidence_url,
+                {"backend": "web_search", "error": str(exc)},
+            )
+
+        hits = _filter_citations(citations, platform=platform)
+        evidence_payload: dict[str, Any] = {
+            "backend": "web_search",
+            "raw_citations": len(citations),
+            "matched_citations": len(hits),
+        }
+        if not hits:
+            return (
+                _make_fields(
+                    platform=platform,
+                    query=query,
+                    kind=kind,
+                    search_url=canonical,
+                    presence_status="not_found",
+                    http_status=None,
+                    hit_count=0,
+                    hits=[],
+                    evidence_marker=(
+                        f"{platform}: web_search returned {len(citations)} citation(s), "
+                        "none matched the platform URL shape"
+                    ),
+                ),
+                evidence_url,
+                evidence_payload,
+            )
+        return (
+            _make_fields(
+                platform=platform,
+                query=query,
+                kind=kind,
+                search_url=canonical,
+                presence_status="exists",
+                http_status=None,
+                hit_count=len(hits),
+                hits=hits[:_MAX_HITS],
+                evidence_marker=f"{platform}: {len(hits)} hit URLs from web_search",
+            ),
+            evidence_url,
+            evidence_payload,
+        )
 
     async def _html_search(
         self,
@@ -512,6 +706,60 @@ class DocLeakCollector(Collector):
         )
 
 
+def _platform_search_url(platform: str, query: str) -> str:
+    """Render the user-facing search URL recorded as ``search_url``.
+
+    Falls back to the empty string for platforms we don't have a known
+    canonical search URL for — the trace's ``evidence_marker`` and
+    ``hits[].url`` still carry actionable information in that case.
+    """
+    template = _PLATFORM_SEARCH_URL.get(platform)
+    return template.format(quote_plus(query)) if template else ""
+
+
+def _platform_domain(platform: str) -> str:
+    """Map a platform token to the domain used in ``site:`` dorks."""
+    return {
+        "scribd": "scribd.com",
+        "slideshare": "slideshare.net",
+        "issuu": "issuu.com",
+        "4shared": "4shared.com",
+        "calameo": "calameo.com",
+        "docplayer": "docplayer.net",
+        "dokumen_tips": "dokumen.tips",
+        "anyflip": "anyflip.com",
+    }.get(platform, platform)
+
+
+def _filter_citations(
+    citations: list[WebSearchHit],
+    *,
+    platform: str,
+) -> list[dict[str, str]]:
+    """Keep only URLs that match :data:`_HIT_PATTERNS` for ``platform``.
+
+    LLM web-search tools sometimes return outbound URLs (ad redirects,
+    cached-page mirrors, archive.org snapshots) even with a strict
+    ``site:`` operator. Anchoring against the per-platform regex
+    guarantees the surfaced hits are genuinely from the target domain.
+    De-duplicates on URL.
+    """
+    hit_re = _HIT_PATTERNS.get(platform)
+    if hit_re is None:
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for citation in citations:
+        if hit_re.fullmatch(citation.url) is None:
+            continue
+        if citation.url in seen:
+            continue
+        seen.add(citation.url)
+        title = citation.title or citation.snippet
+        out.append({"url": citation.url, "title": title[:200] if title else ""})
+    return out
+
+
 def _parse_hits(body: str, *, platform: str) -> list[dict[str, str]]:
     """Extract hit URLs (and best-effort titles) from a search-results body.
 
@@ -577,3 +825,6 @@ def _make_fields(
 
 def _safe_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+__all__ = ["_WEB_SEARCH_LIMIT", "DocLeakCollector"]
