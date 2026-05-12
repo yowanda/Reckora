@@ -211,6 +211,96 @@ async def test_collect_hits_capped_at_max_hits_per_query(
 
 
 @pytest.mark.asyncio
+async def test_collect_drops_dead_urls_via_validator(
+    user_alice: Identifier,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HEAD-probed 404 URLs are dropped from the trace's ``hits`` list.
+
+    Surfaced URLs that the LLM hallucinated or that simply 404 are
+    filtered out before they pollute the dossier — the dossier marker
+    notes how many were dropped so analysts can tell when the AI was
+    being noisy.
+    """
+    from collections.abc import Iterable
+
+    import httpx
+
+    from reckora.reasoning import url_validator
+
+    fn, _ = _make_fn(
+        lambda _q: _hits(
+            "https://example.com/alive",
+            "https://example.com/dead",
+        )
+    )
+
+    async def _fake_probe(
+        urls: Iterable[str],
+        *,
+        client: object,
+        concurrency: int = 8,
+        timeout: float = 8.0,
+    ) -> list[url_validator.URLProbeResult]:
+        return [
+            url_validator.URLProbeResult(
+                url=u,
+                alive=(u == "https://example.com/alive"),
+                http_status=200 if u == "https://example.com/alive" else 404,
+                final_url=u if u == "https://example.com/alive" else None,
+                error=None,
+            )
+            for u in urls
+        ]
+
+    # Patch at the LeakHunt import site, not at the source module —
+    # ``from ..reasoning.url_validator import probe_urls`` captures
+    # the name in the leak_hunt namespace.
+    from reckora.collectors import leak_hunt as leak_hunt_mod
+
+    monkeypatch.setattr(leak_hunt_mod, "probe_urls", _fake_probe)
+
+    async with httpx.AsyncClient() as client:
+        collector = LeakHuntCollector(client=client, web_search_fn=fn)
+        traces = await collector.collect(user_alice)
+
+    # Every trace ran with the same fake responder, so each has the
+    # same one alive + one dead pair. We expect the validator to drop
+    # the dead one and the marker text to mention the drop.
+    for trace in traces:
+        urls = [h["url"] for h in trace.fields["hits"]]
+        assert urls == ["https://example.com/alive"]
+        assert "dropped as dead" in trace.fields["evidence_marker"]
+
+
+@pytest.mark.asyncio
+async def test_collect_categorises_rate_limit_as_rate_limited_marker(
+    user_alice: Identifier,
+) -> None:
+    """``WebSearchRateLimitError`` produces a ``rate_limited`` marker.
+
+    Distinguishes the recoverable "OpenAI quota exhausted" case from a
+    generic backend bug so users can tell when re-running the
+    investigation a minute later is likely to succeed.
+    """
+    from reckora.reasoning.web_search import WebSearchRateLimitError
+
+    def responder(_q: str) -> list[WebSearchHit] | Exception:
+        return WebSearchRateLimitError("web-search backend rate limited (HTTP 429)")
+
+    fn, _ = _make_fn(responder)
+    collector = LeakHuntCollector(web_search_fn=fn)
+
+    traces = await collector.collect(user_alice)
+
+    # Every query returns the rate-limit error; every trace ends up
+    # ``blocked`` with the ``rate_limited:`` prefix.
+    for trace in traces:
+        assert trace.fields["presence_status"] == "blocked"
+        assert trace.fields["evidence_marker"].startswith("rate_limited:")
+
+
+@pytest.mark.asyncio
 async def test_collect_returns_empty_for_unsupported_identifier() -> None:
     """Non-username/email identifiers short-circuit without calling
     the backend (``supports()`` returns False)."""

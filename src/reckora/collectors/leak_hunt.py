@@ -48,7 +48,13 @@ import httpx
 from ..evidence.chain import make_evidence
 from ..models.entity import Identifier, Trace
 from ..models.enums import IdentifierType, TraceSource
-from ..reasoning.web_search import WebSearchError, WebSearchFn, WebSearchHit
+from ..reasoning.url_validator import probe_urls
+from ..reasoning.web_search import (
+    WebSearchError,
+    WebSearchFn,
+    WebSearchHit,
+    WebSearchRateLimitError,
+)
 from .base import Collector
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9._\-]{1,64}$")
@@ -134,10 +140,17 @@ class LeakHuntCollector(Collector):
         *,
         web_search_fn: WebSearchFn | None = None,
         templates: tuple[_QueryTemplate, ...] | None = None,
+        validate_urls: bool = True,
     ) -> None:
         super().__init__(client)
         self._web_search_fn = web_search_fn
         self._templates = templates if templates is not None else _QUERY_TEMPLATES
+        # When ``True`` (default), surfaced URLs are HEAD-probed and
+        # any 404 / 410 / transport-error hits are dropped before the
+        # trace is built. Tests that mock :data:`WebSearchFn` with
+        # synthetic URLs flip this off so the test bodies don't issue
+        # real network requests.
+        self._validate_urls = validate_urls
 
     async def collect(self, identifier: Identifier) -> list[Trace]:
         if not self.supports(identifier):
@@ -178,8 +191,13 @@ class LeakHuntCollector(Collector):
             return_exceptions=False,
         )
 
+        # URL validation runs once across the whole investigation so
+        # one HEAD-probe budget is shared by every query. We collect
+        # the survivors here then thread them back to ``_trace_from_result``.
+        alive_by_url = await self._validate_hits(results)
+
         traces: list[Trace] = []
-        for (template, query), (hits, error) in zip(rendered, results, strict=True):
+        for (template, query), (hits, error, error_kind) in zip(rendered, results, strict=True):
             traces.append(
                 self._trace_from_result(
                     identifier=identifier,
@@ -188,6 +206,8 @@ class LeakHuntCollector(Collector):
                     query=query,
                     hits=hits,
                     error=error,
+                    error_kind=error_kind,
+                    alive_by_url=alive_by_url,
                 )
             )
         return traces
@@ -195,21 +215,53 @@ class LeakHuntCollector(Collector):
     async def _run_query(
         self,
         query: str,
-    ) -> tuple[list[WebSearchHit], str | None]:
+    ) -> tuple[list[WebSearchHit], str | None, str | None]:
         """Call the backend; capture transport errors as marker text.
 
-        Returning a ``(hits, error)`` pair instead of raising keeps the
-        outer ``asyncio.gather`` simple and lets us emit a ``blocked``
-        trace per failed query rather than nuking the whole pass.
+        Returning a ``(hits, error, error_kind)`` triple instead of
+        raising keeps the outer ``asyncio.gather`` simple and lets us
+        emit a ``blocked`` trace per failed query rather than nuking
+        the whole pass. ``error_kind`` distinguishes ``rate_limited``
+        (HTTP 429, after retries exhausted) from generic
+        ``backend_error`` so the dossier can surface the difference —
+        analysts care because rate-limit failures often resolve by
+        re-running the investigation a minute later, whereas a generic
+        error is a real bug.
         """
         assert self._web_search_fn is not None
         try:
             hits = await self._web_search_fn(query)
+        except WebSearchRateLimitError as exc:
+            return [], str(exc), "rate_limited"
         except WebSearchError as exc:
-            return [], str(exc)
+            return [], str(exc), "backend_error"
         except Exception as exc:  # pragma: no cover — defensive
-            return [], f"unexpected {type(exc).__name__}: {exc}"
-        return hits, None
+            return [], f"unexpected {type(exc).__name__}: {exc}", "backend_error"
+        return hits, None, None
+
+    async def _validate_hits(
+        self,
+        results: list[tuple[list[WebSearchHit], str | None, str | None]],
+    ) -> dict[str, bool]:
+        """HEAD-probe every URL the backend returned; build a survivor set.
+
+        Empty dict is returned when validation is disabled (used by
+        unit tests with synthetic URLs) or when no URLs were
+        collected, signalling to ``_trace_from_result`` that every
+        hit should be kept as-is.
+        """
+        if not self._validate_urls or self._client is None:
+            return {}
+        all_urls: set[str] = set()
+        for hits, _err, _kind in results:
+            for hit in hits:
+                url = hit.url.strip()
+                if url:
+                    all_urls.add(url)
+        if not all_urls:
+            return {}
+        verdicts = await probe_urls(all_urls, client=self._client)
+        return {v.url: v.alive for v in verdicts}
 
     def _trace_from_result(
         self,
@@ -220,8 +272,11 @@ class LeakHuntCollector(Collector):
         query: str,
         hits: list[WebSearchHit],
         error: str | None,
+        error_kind: str | None,
+        alive_by_url: dict[str, bool],
     ) -> Trace:
         if error is not None:
+            label = "rate_limited" if error_kind == "rate_limited" else "backend error"
             fields = _make_fields(
                 query=query,
                 template=template,
@@ -229,7 +284,7 @@ class LeakHuntCollector(Collector):
                 presence_status="blocked",
                 hit_count=0,
                 hits=[],
-                evidence_marker=f"backend error: {error}",
+                evidence_marker=f"{label}: {error}",
             )
             return Trace(
                 identifier=identifier,
@@ -237,25 +292,39 @@ class LeakHuntCollector(Collector):
                 fields=fields,
                 evidence=make_evidence(
                     "reckora://leak_hunt",
-                    {"query": query, "error": error},
+                    {"query": query, "error": error, "error_kind": error_kind},
                     keep_raw=False,
                 ),
             )
 
         unique: list[dict[str, str]] = []
         seen: set[str] = set()
+        dropped_dead = 0
         for hit in hits:
             url = hit.url.strip()
             if not url or url in seen:
                 continue
             seen.add(url)
+            if alive_by_url and alive_by_url.get(url) is False:
+                # URL was HEAD-probed and returned 404 / transport
+                # error. Most likely an AI hallucination or a removed
+                # leak; either way it's noise and we drop it before
+                # it pollutes the dossier.
+                dropped_dead += 1
+                continue
             unique.append({"url": url, "title": hit.title or url})
             if len(unique) >= _WEB_SEARCH_LIMIT:
                 break
 
         hit_count = len(unique)
         presence_status = "exists" if hit_count > 0 else "not_found"
-        marker = f"leak_hunt: {hit_count} URL{'s' if hit_count != 1 else ''} via web_search"
+        if dropped_dead:
+            marker = (
+                f"leak_hunt: {hit_count} URL{'s' if hit_count != 1 else ''} via web_search "
+                f"({dropped_dead} dropped as dead links)"
+            )
+        else:
+            marker = f"leak_hunt: {hit_count} URL{'s' if hit_count != 1 else ''} via web_search"
         fields = _make_fields(
             query=query,
             template=template,
