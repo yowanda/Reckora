@@ -60,6 +60,22 @@ CODEX_TOOL_TYPE = "web_search"
 DEFAULT_PLATFORM_MODEL = "gpt-4o-mini"
 DEFAULT_CODEX_MODEL = "gpt-5.5"
 
+# System prompt threaded through ``instructions`` on the Responses-API
+# request. The Codex backend rejects requests that omit this field with
+# ``HTTP 400 {"detail":"Instructions are required"}`` — historically it
+# was optional, but the backend started enforcing it in 2026. Keeping it
+# short and search-focused: the model's only job is to invoke the
+# ``web_search`` tool against the user query and surface the top URLs as
+# citations; the assistant text itself is discarded by
+# :func:`_collect_citations_from_item`.
+DEFAULT_INSTRUCTIONS = (
+    "You are a focused web-search assistant for OSINT investigations. "
+    "For each user query, call the web_search tool exactly once with the "
+    "query verbatim and surface the most relevant URLs as citations. "
+    "Do not paraphrase the query, do not invent results, and do not add "
+    "commentary beyond a brief one-line summary of each hit."
+)
+
 
 @dataclass(frozen=True)
 class WebSearchHit:
@@ -107,6 +123,7 @@ async def web_search_via_platform_api(
     client: httpx.AsyncClient,
     limit: int = 10,
     model: str = DEFAULT_PLATFORM_MODEL,
+    instructions: str = DEFAULT_INSTRUCTIONS,
     timeout: float = 25.0,
 ) -> list[WebSearchHit]:
     """Run a single ``web_search_preview`` call against ``api.openai.com``.
@@ -121,6 +138,7 @@ async def web_search_via_platform_api(
         model=model,
         tool_type=PLATFORM_TOOL_TYPE,
         store=True,
+        instructions=instructions,
     )
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -145,6 +163,7 @@ async def web_search_via_chatgpt_oauth(
     limit: int = 10,
     model: str = DEFAULT_CODEX_MODEL,
     base_url: str = CHATGPT_CODEX_BASE_URL,
+    instructions: str = DEFAULT_INSTRUCTIONS,
     timeout: float = 25.0,
 ) -> list[WebSearchHit]:
     """Run a single ``web_search`` call against the ChatGPT Codex backend.
@@ -153,13 +172,17 @@ async def web_search_via_chatgpt_oauth(
     :func:`reckora.auth.codex_client.complete_with_tools_via_codex`.
     The Codex backend rejects requests that leave ``store`` unset or
     truthy — we always send ``store=False`` here to match the rest of
-    the OAuth code path.
+    the OAuth code path. It also rejects requests that omit
+    ``instructions`` (``HTTP 400 {"detail":"Instructions are required"}``),
+    so the helper always threads a sensible default through
+    :data:`DEFAULT_INSTRUCTIONS`.
     """
     body = _build_request_body(
         query=query,
         model=model,
         tool_type=CODEX_TOOL_TYPE,
         store=False,
+        instructions=instructions,
     )
     headers = {
         "Authorization": f"Bearer {credentials.access_token}",
@@ -183,6 +206,7 @@ def make_web_search_fn(
     oauth_credentials: OAuthCredentials | None = None,
     platform_model: str = DEFAULT_PLATFORM_MODEL,
     codex_model: str = DEFAULT_CODEX_MODEL,
+    instructions: str = DEFAULT_INSTRUCTIONS,
     timeout: float = 25.0,
     limit: int = 10,
 ) -> WebSearchFn:
@@ -204,6 +228,7 @@ def make_web_search_fn(
                 client=client,
                 limit=limit,
                 model=platform_model,
+                instructions=instructions,
                 timeout=timeout,
             )
 
@@ -218,6 +243,7 @@ def make_web_search_fn(
                 client=client,
                 limit=limit,
                 model=codex_model,
+                instructions=instructions,
                 timeout=timeout,
             )
 
@@ -234,15 +260,20 @@ def _build_request_body(
     model: str,
     tool_type: str,
     store: bool,
+    instructions: str = DEFAULT_INSTRUCTIONS,
 ) -> dict[str, Any]:
     """Construct the Responses-API request body for a tool-only call.
 
     ``tool_choice`` is pinned to the same tool type as ``tools`` so the
     model can't decide to skip the search and answer from priors —
-    we want deterministic search behaviour for OSINT.
+    we want deterministic search behaviour for OSINT. ``instructions``
+    is required by the Codex backend (omitting it returns
+    ``HTTP 400 {"detail":"Instructions are required"}``) and harmless on
+    the Platform path, so it is always sent.
     """
     return {
         "model": model,
+        "instructions": instructions,
         "input": [
             {
                 "role": "user",
