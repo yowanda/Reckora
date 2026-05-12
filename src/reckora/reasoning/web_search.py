@@ -36,6 +36,7 @@ each URL is genuinely from the target domain).
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -61,20 +62,36 @@ DEFAULT_PLATFORM_MODEL = "gpt-4o-mini"
 DEFAULT_CODEX_MODEL = "gpt-5.5"
 
 # System prompt threaded through ``instructions`` on the Responses-API
-# request. The Codex backend rejects requests that omit this field with
-# ``HTTP 400 {"detail":"Instructions are required"}`` — historically it
-# was optional, but the backend started enforcing it in 2026. Keeping it
-# short and search-focused: the model's only job is to invoke the
-# ``web_search`` tool against the user query and surface the top URLs as
-# citations; the assistant text itself is discarded by
-# :func:`_collect_citations_from_item`.
+# request. Two roles:
+#
+#   1. The Codex backend rejects requests that omit ``instructions`` with
+#      ``HTTP 400 {"detail":"Instructions are required"}`` — historically
+#      optional, enforced in 2026.
+#   2. The Codex backend's ``web_search`` tool result is NOT surfaced to
+#      callers as ``url_citation`` annotations (only the Platform path's
+#      ``web_search_preview`` tool does that). The model has to write the
+#      result URLs into the final assistant message text instead, where
+#      :func:`_extract_urls_from_text` picks them up. The prompt therefore
+#      *requires* the model to produce a non-empty final message listing
+#      every relevant URL on its own line; otherwise the call returns
+#      zero hits even when the tool ran successfully.
 DEFAULT_INSTRUCTIONS = (
     "You are a focused web-search assistant for OSINT investigations. "
     "For each user query, call the web_search tool exactly once with the "
-    "query verbatim and surface the most relevant URLs as citations. "
-    "Do not paraphrase the query, do not invent results, and do not add "
-    "commentary beyond a brief one-line summary of each hit."
+    "query verbatim. After the tool returns, you MUST produce a final "
+    "assistant message that lists every relevant result URL on its own "
+    "line. Do not paraphrase the query, do not invent results, do not "
+    "omit URLs the tool returned, and never produce an empty final "
+    "message — the caller parses the URLs out of that message text."
 )
+
+# Recognises bare ``https://``/``http://`` URLs inside assistant message
+# text. Used by :func:`_extract_urls_from_text` as a fallback when the
+# Codex backend skips ``url_citation`` annotations. Stops at whitespace,
+# common bracketing characters, and trailing punctuation so URLs from
+# prose-style listings (``"...site (https://...)."``) round-trip cleanly.
+_URL_RE = re.compile(r"https?://[^\s<>\"\)\]\}]+")
+_URL_TRIM_TRAILING = ".,;:!?"
 
 
 @dataclass(frozen=True)
@@ -360,13 +377,24 @@ def _collect_citations_from_item(
     seen: set[str],
     limit: int,
 ) -> None:
-    """Extract ``url_citation`` annotations from one ``output_item.done`` event.
+    """Extract URL hits from one ``output_item.done`` message event.
 
     Output items that carry citations are of type ``message`` with
-    ``content`` blocks of type ``output_text`` whose ``annotations``
-    array contains the citation records. Web-search-tool result items
-    themselves (``type: web_search_call``) don't carry the URLs — the
-    URLs land on the *next* assistant message that summarises them.
+    ``content`` blocks of type ``output_text``. Two extraction paths:
+
+    1. ``url_citation`` entries in the block's ``annotations`` array —
+       used by ``api.openai.com``'s ``web_search_preview`` tool and the
+       documented Responses-API shape.
+    2. Bare URLs in the block's ``text`` — fallback for backends that
+       don't auto-annotate (notably ``chatgpt.com/backend-api/codex/
+       responses``: its ``web_search`` tool returns results to the model
+       in-context but never emits ``url_citation`` records, so the model
+       must re-write them in the final message text per
+       :data:`DEFAULT_INSTRUCTIONS`).
+
+    Web-search-tool result items themselves (``type: web_search_call``)
+    don't carry the URLs — the URLs land on the *next* assistant message
+    that summarises them.
     """
     if not isinstance(item, dict):
         return
@@ -378,19 +406,32 @@ def _collect_citations_from_item(
     for block in content:
         if not isinstance(block, dict):
             continue
-        annotations = block.get("annotations")
-        if not isinstance(annotations, list):
-            continue
         block_text = block.get("text")
         text = block_text if isinstance(block_text, str) else ""
-        for ann in annotations:
-            if len(hits) >= limit:
-                return
-            hit = _hit_from_annotation(ann, text)
-            if hit is None or hit.url in seen:
+        annotations = block.get("annotations")
+        annotations_yielded_hit = False
+        if isinstance(annotations, list):
+            for ann in annotations:
+                if len(hits) >= limit:
+                    return
+                hit = _hit_from_annotation(ann, text)
+                if hit is None or hit.url in seen:
+                    continue
+                seen.add(hit.url)
+                hits.append(hit)
+                annotations_yielded_hit = True
+        if annotations_yielded_hit:
+            # Trust the structured citations when present; mixing with
+            # text-scraped URLs from the same block risks counting one
+            # hit twice with mismatched titles.
+            continue
+        for hit in _extract_urls_from_text(text, limit - len(hits)):
+            if hit.url in seen:
                 continue
             seen.add(hit.url)
             hits.append(hit)
+            if len(hits) >= limit:
+                return
 
 
 def _collect_citations_from_completed(
@@ -417,6 +458,32 @@ def _collect_citations_from_completed(
         if len(hits) >= limit:
             return
         _collect_citations_from_item(item, hits, seen, limit)
+
+
+def _extract_urls_from_text(text: str, remaining: int) -> list[WebSearchHit]:
+    """Scrape bare ``http(s)`` URLs out of an assistant message body.
+
+    Used as a fallback when the Responses-API stream returns no
+    structured ``url_citation`` annotations — most commonly on the
+    Codex OAuth backend. Caps the result list at ``remaining`` so the
+    caller's overall ``limit`` budget is preserved. Each returned
+    :class:`WebSearchHit` carries the raw URL as its title; the per-site
+    canonical regex in :mod:`reckora.collectors.doc_leak` does the
+    relevance gating downstream.
+    """
+    if remaining <= 0 or not text:
+        return []
+    out: list[WebSearchHit] = []
+    seen_local: set[str] = set()
+    for match in _URL_RE.finditer(text):
+        url = match.group(0).rstrip(_URL_TRIM_TRAILING)
+        if not url or url in seen_local:
+            continue
+        seen_local.add(url)
+        out.append(WebSearchHit(url=url, title=url, snippet=""))
+        if len(out) >= remaining:
+            break
+    return out
 
 
 def _hit_from_annotation(ann: Any, text: str) -> WebSearchHit | None:
