@@ -19,6 +19,7 @@ from pytest_httpx import HTTPXMock
 
 from reckora.auth.oauth import CHATGPT_CODEX_BASE_URL, OAuthCredentials
 from reckora.reasoning.web_search import (
+    DEFAULT_INSTRUCTIONS,
     OPENAI_RESPONSES_URL,
     WebSearchError,
     WebSearchHit,
@@ -230,6 +231,12 @@ async def test_platform_api_request_authorisation_and_body(httpx_mock: HTTPXMock
     assert body["tools"] == [{"type": "web_search_preview"}]
     assert body["tool_choice"] == {"type": "web_search_preview"}
     assert body["stream"] is True
+    # ``instructions`` is mandatory on the Codex backend and harmless on
+    # the Platform path — the helper threads the default through both so
+    # the regression that produced ``HTTP 400 {"detail":"Instructions are
+    # required"}`` against ``chatgpt.com/backend-api/codex/responses``
+    # can't reappear under either transport.
+    assert body["instructions"] == DEFAULT_INSTRUCTIONS
 
 
 async def test_platform_api_4xx_raises_websearcherror(httpx_mock: HTTPXMock) -> None:
@@ -296,6 +303,11 @@ async def test_oauth_request_routes_to_codex_endpoint_and_uses_short_tool_name(
     assert body["tool_choice"] == {"type": "web_search"}
     # Codex backend rejects ``store=True``; the helper must send False.
     assert body["store"] is False
+    # The Codex backend also rejects requests with no ``instructions``
+    # (``HTTP 400 {"detail":"Instructions are required"}``); the helper
+    # always sends :data:`DEFAULT_INSTRUCTIONS` so the OAuth path stops
+    # silently 400-ing every doc-leak query.
+    assert body["instructions"] == DEFAULT_INSTRUCTIONS
 
 
 # ----------------------------------------------- citation parser invariants
