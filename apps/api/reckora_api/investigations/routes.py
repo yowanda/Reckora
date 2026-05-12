@@ -15,6 +15,7 @@ from reckora.auth.storage import load_credentials
 from reckora.collectors.base import Collector
 from reckora.collectors.breach import BreachCollector
 from reckora.collectors.doc_leak import DocLeakCollector
+from reckora.collectors.leak_hunt import LeakHuntCollector
 from reckora.config import settings as engine_settings
 from reckora.evidence.anchor import Anchor, anchor_traces
 from reckora.evidence.archive import Archiver, WaybackArchiver
@@ -122,6 +123,27 @@ def _build_doc_leak_collector(
     return DocLeakCollector(web_search_fn=web_search_fn)
 
 
+def _build_leak_hunt_collector(
+    *,
+    web_search_fn: WebSearchFn | None = None,
+) -> Collector:
+    """Construct the AI-driven open-ended leak-search collector.
+
+    Complements :func:`_build_doc_leak_collector` under the same
+    ``breach: true`` toggle. Doc-leak walks a fixed list of twelve
+    document-share / paste platforms with per-site regex anchors;
+    leak-hunt renders a small bank of leak-vector query templates
+    against the seed and lets the LLM web-search backend decide which
+    sites are relevant. Both signals end up in the same dossier so
+    analysts get the platform-by-platform breakdown *and* the
+    open-ended view.
+
+    Pulled out as a module-level helper so tests can monkeypatch it
+    (mirroring ``_build_breach_collector`` / ``_build_doc_leak_collector``).
+    """
+    return LeakHuntCollector(web_search_fn=web_search_fn)
+
+
 @asynccontextmanager
 async def _web_search_backend(*, enabled: bool) -> AsyncIterator[WebSearchFn | None]:
     """Resolve a :data:`WebSearchFn` for the doc-leak collector.
@@ -203,15 +225,17 @@ async def create_investigation(
         _build_screenshotter(api_settings) if payload.screenshot else None
     )
     # The ``web_search_fn`` lifetime must wrap ``orchestrator.investigate``
-    # because :class:`DocLeakCollector` invokes it during collection. We
-    # only resolve a backend when ``breach`` is on; otherwise the context
-    # manager short-circuits to ``None`` and the orchestrator path is
-    # unchanged for stock investigations.
+    # because both :class:`DocLeakCollector` and :class:`LeakHuntCollector`
+    # invoke it during collection. We only resolve a backend when
+    # ``breach`` is on; otherwise the context manager short-circuits to
+    # ``None`` and the orchestrator path is unchanged for stock
+    # investigations.
     async with _web_search_backend(enabled=payload.breach) as web_search_fn:
         extra_collectors: list[Collector] = (
             [
                 _build_breach_collector(),
                 _build_doc_leak_collector(web_search_fn=web_search_fn),
+                _build_leak_hunt_collector(web_search_fn=web_search_fn),
             ]
             if payload.breach
             else []

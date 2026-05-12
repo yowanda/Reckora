@@ -43,6 +43,7 @@ class TraceSource(StrEnum):
     TIKTOK_WEB = "tiktok_web"
     SOCIAL_PRESENCE_PROBE = "social_presence_probe"
     DOC_LEAK = "doc_leak"
+    LEAK_HUNT = "leak_hunt"
     USER_PROVIDED = "user_provided"
     WEB_RESEARCH = "web_research"
 

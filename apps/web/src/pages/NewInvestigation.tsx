@@ -20,13 +20,14 @@ const KINDS = [
 
 type Kind = (typeof KINDS)[number];
 
-type ToggleKey =
-  | "archive"
-  | "screenshot"
-  | "ai"
-  | "ai_agent"
-  | "breach"
-  | "anchor";
+// One UI toggle now bundles multiple backend flags. The legacy six
+// toggles (archive / screenshot / ai / ai_agent / breach / anchor) were
+// confusing for analysts because the distinction between ``ai`` and
+// ``ai_agent`` wasn't visible in the dossier and the three forensic
+// flags (archive + screenshot + anchor) always travelled together.
+// We expose three intent-driven toggles instead and translate them to
+// the underlying flags inside ``onSubmit``.
+type ToggleKey = "ai" | "leak" | "forensic";
 
 const TOGGLES: Array<{
   label: string;
@@ -34,36 +35,22 @@ const TOGGLES: Array<{
   description: string;
 }> = [
   {
-    label: "archive",
-    key: "archive",
-    description: "Save WebArchive snapshots of every URL hit.",
-  },
-  {
-    label: "screenshot",
-    key: "screenshot",
-    description: "Capture full-page PNG of every URL surface.",
-  },
-  {
-    label: "ai",
+    label: "AI investigation",
     key: "ai",
-    description: "Summarise + hypothesise via the configured LLM.",
-  },
-  {
-    label: "ai agent",
-    key: "ai_agent",
     description:
-      "Recursive AgentLoop: LLM proposes follow-ups + can call web_search / fetch_url. Implies ai. Works on both OPENAI_API_KEY and ChatGPT OAuth.",
+      "Summarise, hypothesise, and run the recursive AgentLoop (LLM proposes follow-ups + can call web_search / fetch_url). Uses your configured OpenAI / ChatGPT OAuth credential.",
   },
   {
-    label: "breach",
-    key: "breach",
+    label: "Leak hunt",
+    key: "leak",
     description:
-      "Check breach corpora (HIBP, email-only) + probe public doc-share / paste sites (Scribd, pdfcoffee, pdfslide, SlideShare, Issuu, 4shared, archive.org, Pastebin) for username + email.",
+      "Check breach corpora (HIBP) + AI-driven open-ended search across leak / paste / doc-share sites for the seed (Scribd, SlideShare, Issuu, pastebin, archive.org, plus whatever else the model surfaces).",
   },
   {
-    label: "anchor",
-    key: "anchor",
-    description: "Pin the dossier to its evidence chain.",
+    label: "Forensic preservation",
+    key: "forensic",
+    description:
+      "One-click chain-of-custody: WebArchive snapshots of every URL, full-page PNG screenshots, and an anchored hash so the dossier is reproducible and tamper-evident.",
   },
 ];
 
@@ -89,12 +76,9 @@ export function NewInvestigationPage() {
   const [kind, setKind] = useState<Kind>("username");
   const [value, setValue] = useState("");
   const [flags, setFlags] = useState<Record<ToggleKey, boolean>>({
-    archive: false,
-    screenshot: false,
     ai: false,
-    ai_agent: false,
-    breach: false,
-    anchor: false,
+    leak: false,
+    forensic: false,
   });
 
   const mutation = useMutation({
@@ -108,17 +92,21 @@ export function NewInvestigationPage() {
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const { ai_agent, ...rest } = flags;
+    // Translate the three intent-driven toggles into the underlying
+    // backend flags. ``ai`` always enables AgentLoop with sensible
+    // defaults (most users want the recursive + tool-using mode and
+    // the per-iteration tunables aren't worth surfacing in the UI).
+    // ``forensic`` activates the full chain-of-custody bundle.
     mutation.mutate({
       seed: { kind, value },
-      ...rest,
-      // ``ai_agent`` is a UI convenience: it implies ``ai`` (the LLM
-      // pipeline must run for the AgentLoop to mean anything) and
-      // sets sensible defaults for the recursive + tool-using flags.
-      ai: rest.ai || ai_agent,
-      ai_iterations: ai_agent ? 2 : 0,
-      ai_tools: ai_agent,
+      ai: flags.ai,
+      ai_iterations: flags.ai ? 2 : 0,
+      ai_tools: flags.ai,
       ai_tool_calls: 8,
+      breach: flags.leak,
+      archive: flags.forensic,
+      screenshot: flags.forensic,
+      anchor: flags.forensic,
       // PR2 will surface a provider picker in the UI; until then,
       // submit "auto" so the backend keeps its API-key → OAuth chain.
       llm_provider: "auto",
@@ -182,7 +170,7 @@ export function NewInvestigationPage() {
 
           <div>
             <div className="mb-2 text-2xs font-medium uppercase tracking-[0.18em] text-fg-dim">
-              Collector flags
+              Investigation mode
             </div>
             <fieldset className="grid gap-2 sm:grid-cols-2">
               {TOGGLES.map((t) => (
