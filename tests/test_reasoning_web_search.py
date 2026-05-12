@@ -167,6 +167,47 @@ _ERROR_EVENT_SSE = _sse(
 )
 
 
+# Mirrors what the Codex OAuth backend actually returns: the
+# ``web_search`` tool runs to completion, then the model emits a final
+# assistant message whose ``text`` block lists the result URLs on
+# separate lines but whose ``annotations`` array is empty (Codex does
+# NOT auto-emit ``url_citation`` records the way ``api.openai.com``'s
+# ``web_search_preview`` does). The helper has to fall back to scraping
+# the message text — see :func:`_extract_urls_from_text`.
+_OAUTH_BARE_URLS_IN_TEXT_SSE = _sse(
+    [
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "web_search_call",
+                "status": "completed",
+                "action": {"type": "search", "query": "site:scribd.com alice"},
+            },
+        },
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": (
+                            "https://www.scribd.com/document/111/Alice-Resume\n\n"
+                            "https://www.scribd.com/document/222/Alice-CV\n\n"
+                            "Trailing prose with a duplicate "
+                            "https://www.scribd.com/document/111/Alice-Resume and "
+                            "an inline (https://issuu.com/alice/docs/notes)."
+                        ),
+                        "annotations": [],
+                    }
+                ],
+            },
+        },
+        {"type": "response.completed", "response": {"output": []}},
+    ]
+)
+
+
 # Per-platform endpoint helpers — both transports share the same body
 # shape but post to different URLs.
 _OAUTH_URL = f"{CHATGPT_CODEX_BASE_URL}/responses"
@@ -406,6 +447,43 @@ async def test_make_web_search_fn_falls_back_to_oauth(httpx_mock: HTTPXMock) -> 
         )
         hits = await fn("alice")
     assert hits
+
+
+async def test_oauth_falls_back_to_text_extraction_when_annotations_empty(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Codex backend lists URLs in message text, not annotations.
+
+    Mirrors the production stream observed against
+    ``chatgpt.com/backend-api/codex/responses``: the ``web_search`` tool
+    completes, the model writes a final assistant message containing
+    bare ``https://`` URLs in its text block, but ``annotations`` is
+    empty. Without text-extraction the helper used to return zero hits,
+    so the eight SPA doc-leak platforms surfaced as
+    ``presence_status="not_found"`` even when the search succeeded.
+    """
+    httpx_mock.add_response(
+        url=_OAUTH_URL,
+        method="POST",
+        content=_OAUTH_BARE_URLS_IN_TEXT_SSE,
+        headers={"Content-Type": "text/event-stream"},
+    )
+    creds = _fresh_credentials()
+    async with httpx.AsyncClient() as client:
+        hits = await web_search_via_chatgpt_oauth(
+            "site:scribd.com alice",
+            credentials=creds,
+            client=client,
+        )
+    urls = [h.url for h in hits]
+    # Deduplicates the repeated scribd URL and trims the trailing ``)``
+    # off the parenthesised issuu URL so each result is the canonical
+    # platform link a downstream regex can validate.
+    assert urls == [
+        "https://www.scribd.com/document/111/Alice-Resume",
+        "https://www.scribd.com/document/222/Alice-CV",
+        "https://issuu.com/alice/docs/notes",
+    ]
 
 
 async def test_make_web_search_fn_raises_when_no_credentials() -> None:
