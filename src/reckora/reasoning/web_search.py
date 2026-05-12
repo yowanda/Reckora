@@ -35,7 +35,9 @@ each URL is genuinely from the target domain).
 
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -113,6 +115,16 @@ class WebSearchError(RuntimeError):
     body shape we don't recognise."""
 
 
+class WebSearchRateLimitError(WebSearchError):
+    """Backend rate-limited us (HTTP 429).
+
+    Surfaced as a distinct subclass so the retry wrapper in
+    :func:`make_web_search_fn` can apply a longer backoff and so
+    collectors can categorise the failure in their trace markers
+    (``backend rate_limited`` vs the generic ``backend error``).
+    """
+
+
 class WebSearchUnavailableError(RuntimeError):
     """No backend is configured to satisfy a ``web_search`` call.
 
@@ -131,6 +143,19 @@ WebSearchFn = Callable[[str], Awaitable[list[WebSearchHit]]]
 ``site:scribd.com "alice"``). Implementations cap the returned list at
 their own ``limit`` argument; callers further trim downstream.
 """
+
+# Default concurrency cap on simultaneous backend calls. Codex OAuth
+# accounts are rate-limited per ChatGPT Plus subscription, so fanning
+# out 13 queries at once (5 leak_hunt + 8 doc_leak) reliably trips the
+# limit. Three concurrent calls keep the per-investigation wall clock
+# reasonable (~20-30s) while staying inside the documented quota.
+DEFAULT_MAX_CONCURRENCY = 3
+
+# Default retry policy for transient backend failures. Applied to HTTP
+# 429, HTTP 5xx, and stream timeouts. Total worst-case wall clock is
+# ~12s (1 + 3 + 8 second sleeps before each retry) per query.
+DEFAULT_MAX_RETRIES = 3
+_RETRY_BACKOFF_BASE = 1.0  # seconds; doubled each attempt with jitter
 
 
 async def web_search_via_platform_api(
@@ -226,6 +251,8 @@ def make_web_search_fn(
     instructions: str = DEFAULT_INSTRUCTIONS,
     timeout: float = 25.0,
     limit: int = 10,
+    max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
+    max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> WebSearchFn:
     """Resolve a :data:`WebSearchFn` from whichever credential is available.
 
@@ -235,40 +262,128 @@ def make_web_search_fn(
     when neither is configured — orchestrators construct the function
     once at startup and inject it into collectors, so failing fast here
     surfaces the misconfiguration before any traces are emitted.
+
+    The returned function is wrapped with two layers of resilience:
+
+    * An :class:`asyncio.Semaphore` (``max_concurrency``) caps the number
+      of in-flight backend calls. Multiple collectors invoking the same
+      ``WebSearchFn`` concurrently (``doc_leak`` + ``leak_hunt`` both
+      fan out 8-12 queries) reliably trip per-account rate limits on
+      ChatGPT OAuth; throttling here keeps the per-investigation
+      success rate close to 100% at the cost of slightly higher wall
+      clock.
+    * Retry-with-jittered-exponential-backoff on
+      :class:`WebSearchRateLimitError` (HTTP 429) and HTTP 5xx /
+      transport errors. Retries are bounded by ``max_retries``;
+      :class:`WebSearchError` is re-raised after the budget is
+      exhausted so collectors can still emit a ``blocked`` trace.
     """
+    semaphore = asyncio.Semaphore(max_concurrency)
     if api_key:
 
         async def _via_api(query: str) -> list[WebSearchHit]:
-            return await web_search_via_platform_api(
-                query,
-                api_key=api_key,
-                client=client,
-                limit=limit,
-                model=platform_model,
-                instructions=instructions,
-                timeout=timeout,
-            )
+            async with semaphore:
+                return await _with_retry(
+                    lambda: web_search_via_platform_api(
+                        query,
+                        api_key=api_key,
+                        client=client,
+                        limit=limit,
+                        model=platform_model,
+                        instructions=instructions,
+                        timeout=timeout,
+                    ),
+                    max_retries=max_retries,
+                )
 
         return _via_api
     if oauth_credentials is not None:
         creds = oauth_credentials
 
         async def _via_oauth(query: str) -> list[WebSearchHit]:
-            return await web_search_via_chatgpt_oauth(
-                query,
-                credentials=creds,
-                client=client,
-                limit=limit,
-                model=codex_model,
-                instructions=instructions,
-                timeout=timeout,
-            )
+            async with semaphore:
+                return await _with_retry(
+                    lambda: web_search_via_chatgpt_oauth(
+                        query,
+                        credentials=creds,
+                        client=client,
+                        limit=limit,
+                        model=codex_model,
+                        instructions=instructions,
+                        timeout=timeout,
+                    ),
+                    max_retries=max_retries,
+                )
 
         return _via_oauth
     raise WebSearchUnavailableError(
         "no web-search backend configured — set OPENAI_API_KEY or "
         "run `reckora auth login` to enable ChatGPT-OAuth web search."
     )
+
+
+async def _with_retry(
+    call: Callable[[], Awaitable[list[WebSearchHit]]],
+    *,
+    max_retries: int,
+) -> list[WebSearchHit]:
+    """Retry a backend call with jittered exponential backoff.
+
+    Distinguishes :class:`WebSearchRateLimitError` (HTTP 429) from
+    generic :class:`WebSearchError`:
+
+    * Rate-limit hits get a longer first backoff (``base * 4``) because
+      OpenAI's quota window is typically tens of seconds; retrying
+      sooner just wastes the budget.
+    * Generic transient errors use the standard ``base * 2**attempt``
+      curve, capped at ``_RETRY_BACKOFF_BASE * 2**max_retries``.
+
+    Non-:class:`WebSearchError` exceptions (e.g. programmer error in
+    the parser) bubble up immediately — we only retry what we know is
+    transient.
+    """
+    last_exc: WebSearchError | None = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await call()
+        except WebSearchRateLimitError as exc:
+            last_exc = exc
+            if attempt >= max_retries:
+                break
+            await _sleep_with_backoff(attempt, scale=4.0)
+        except WebSearchError as exc:
+            last_exc = exc
+            if attempt >= max_retries:
+                break
+            # Only retry transport errors / 5xx. HTTP 4xx (other than
+            # 429, which is its own subclass above) are caller bugs;
+            # retrying won't fix them.
+            message = str(exc).lower()
+            transient = (
+                "transport" in message
+                or any(f"http 5{n:02d}" in message for n in range(100))
+                or "timeout" in message
+            )
+            if not transient:
+                break
+            await _sleep_with_backoff(attempt, scale=1.0)
+    # Either the loop exhausted attempts or hit a non-transient error.
+    # ``last_exc`` is guaranteed set because at least one attempt ran
+    # and raised (success returns inside the try).
+    assert last_exc is not None  # for mypy; the loop guarantees this
+    raise last_exc
+
+
+async def _sleep_with_backoff(attempt: int, *, scale: float = 1.0) -> None:
+    """Sleep ``scale * base * 2**attempt`` seconds with up to 25% jitter.
+
+    Jitter prevents synchronised retry storms when multiple collectors
+    hit a rate limit in lockstep — they otherwise wake up together and
+    re-trigger the same 429.
+    """
+    base = _RETRY_BACKOFF_BASE * scale * (2**attempt)
+    jitter = random.uniform(0.0, base * 0.25)
+    await asyncio.sleep(base + jitter)
 
 
 def _build_request_body(
@@ -338,8 +453,13 @@ async def _stream_and_parse(
                     break
             return hits[:limit]
     except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        if status_code == 429:
+            raise WebSearchRateLimitError(
+                f"web-search backend rate limited (HTTP {status_code})",
+            ) from exc
         raise WebSearchError(
-            f"web-search backend returned HTTP {exc.response.status_code}",
+            f"web-search backend returned HTTP {status_code}",
         ) from exc
     except httpx.HTTPError as exc:
         raise WebSearchError(f"web-search transport error: {type(exc).__name__}") from exc

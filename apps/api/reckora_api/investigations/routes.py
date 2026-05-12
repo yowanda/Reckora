@@ -125,6 +125,7 @@ def _build_doc_leak_collector(
 
 def _build_leak_hunt_collector(
     *,
+    client: httpx.AsyncClient | None = None,
     web_search_fn: WebSearchFn | None = None,
 ) -> Collector:
     """Construct the AI-driven open-ended leak-search collector.
@@ -138,34 +139,42 @@ def _build_leak_hunt_collector(
     analysts get the platform-by-platform breakdown *and* the
     open-ended view.
 
+    The ``client`` parameter (when supplied) lets the collector
+    HEAD-probe every returned URL through the same connection pool
+    the web-search backend uses, so 404s / hallucinated URLs are
+    dropped from the trace before it lands in the dossier.
+
     Pulled out as a module-level helper so tests can monkeypatch it
     (mirroring ``_build_breach_collector`` / ``_build_doc_leak_collector``).
     """
-    return LeakHuntCollector(web_search_fn=web_search_fn)
+    return LeakHuntCollector(client=client, web_search_fn=web_search_fn)
 
 
 @asynccontextmanager
-async def _web_search_backend(*, enabled: bool) -> AsyncIterator[WebSearchFn | None]:
-    """Resolve a :data:`WebSearchFn` for the doc-leak collector.
+async def _web_search_backend(
+    *, enabled: bool
+) -> AsyncIterator[tuple[WebSearchFn | None, httpx.AsyncClient | None]]:
+    """Resolve a :data:`WebSearchFn` (and its owning ``httpx`` client).
 
-    Mirrors :func:`reckora.cli._web_search_backend`: yields ``None``
-    when the caller hasn't opted in (``enabled=False``) or no credential
-    is configured on the server, so the doc-leak collector falls back
-    to its direct-probe-only mode. Otherwise owns an
-    :class:`httpx.AsyncClient` for the lifetime of the investigation
-    so the eight SPA-platform probes can share one connection pool to
-    ``api.openai.com`` / ``chatgpt.com``.
+    Mirrors :func:`reckora.cli._web_search_backend`: yields
+    ``(None, None)`` when the caller hasn't opted in (``enabled=False``)
+    or no credential is configured on the server, so the doc-leak
+    collector falls back to its direct-probe-only mode. Otherwise owns
+    an :class:`httpx.AsyncClient` for the lifetime of the investigation
+    and yields ``(fn, client)`` — the client is exposed so the
+    URL-validation pass in :class:`LeakHuntCollector` can share the
+    same connection pool as the web-search backend itself.
 
     Resolution order matches the CLI: ``OPENAI_API_KEY`` first, then
     on-disk ChatGPT OAuth credentials saved by ``reckora auth login``.
     """
     if not enabled:
-        yield None
+        yield (None, None)
         return
     api_key = engine_settings.openai_api_key or None
     creds = load_credentials()
     if not api_key and creds is None:
-        yield None
+        yield (None, None)
         return
     async with httpx.AsyncClient() as client:
         try:
@@ -175,9 +184,9 @@ async def _web_search_backend(*, enabled: bool) -> AsyncIterator[WebSearchFn | N
                 oauth_credentials=creds,
             )
         except WebSearchUnavailableError:
-            yield None
+            yield (None, client)
             return
-        yield fn
+        yield (fn, client)
 
 
 router = APIRouter(tags=["investigations"])
@@ -230,12 +239,18 @@ async def create_investigation(
     # ``breach`` is on; otherwise the context manager short-circuits to
     # ``None`` and the orchestrator path is unchanged for stock
     # investigations.
-    async with _web_search_backend(enabled=payload.breach) as web_search_fn:
+    async with _web_search_backend(enabled=payload.breach) as (
+        web_search_fn,
+        web_search_client,
+    ):
         extra_collectors: list[Collector] = (
             [
                 _build_breach_collector(),
                 _build_doc_leak_collector(web_search_fn=web_search_fn),
-                _build_leak_hunt_collector(web_search_fn=web_search_fn),
+                _build_leak_hunt_collector(
+                    client=web_search_client,
+                    web_search_fn=web_search_fn,
+                ),
             ]
             if payload.breach
             else []

@@ -23,6 +23,7 @@ from reckora.reasoning.web_search import (
     OPENAI_RESPONSES_URL,
     WebSearchError,
     WebSearchHit,
+    WebSearchRateLimitError,
     WebSearchUnavailableError,
     make_web_search_fn,
     web_search_via_chatgpt_oauth,
@@ -493,6 +494,70 @@ async def test_make_web_search_fn_raises_when_no_credentials() -> None:
 
 
 # --------------------------------------------------- WebSearchHit identity
+
+
+async def test_429_raises_rate_limit_subclass(httpx_mock: HTTPXMock) -> None:
+    """HTTP 429 surfaces as :class:`WebSearchRateLimitError`, not generic.
+
+    The dedicated subclass lets the retry wrapper apply a longer
+    backoff (rate-limit windows are tens of seconds) and lets the
+    collectors categorise the trace marker as ``rate_limited`` so
+    analysts can tell quota exhaustion apart from a real backend bug.
+    """
+    httpx_mock.add_response(
+        url=OPENAI_RESPONSES_URL,
+        method="POST",
+        status_code=429,
+        text="rate limit",
+    )
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(WebSearchRateLimitError) as exc_info:
+            await web_search_via_platform_api(
+                "alice",
+                api_key="sk-test",
+                client=client,
+            )
+    # WebSearchRateLimitError is a subclass of WebSearchError so
+    # existing ``except WebSearchError`` handlers keep working.
+    assert isinstance(exc_info.value, WebSearchError)
+    assert "429" in str(exc_info.value)
+
+
+async def test_make_web_search_fn_retries_on_rate_limit(
+    httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wrapper retries an HTTP 429 once and returns the second-attempt hits.
+
+    Patches the backoff sleeper to a no-op so the test stays fast.
+    """
+    from reckora.reasoning import web_search as ws_mod
+
+    async def _no_sleep(*_a: object, **_kw: object) -> None:
+        return None
+
+    monkeypatch.setattr(ws_mod, "_sleep_with_backoff", _no_sleep)
+
+    # First call: 429. Second call: success.
+    httpx_mock.add_response(
+        url=OPENAI_RESPONSES_URL,
+        method="POST",
+        status_code=429,
+        text="rate limit",
+    )
+    httpx_mock.add_response(
+        url=OPENAI_RESPONSES_URL,
+        method="POST",
+        content=_TWO_CITATIONS_SSE,
+        headers={"Content-Type": "text/event-stream"},
+    )
+
+    async with httpx.AsyncClient() as client:
+        fn = make_web_search_fn(client=client, api_key="sk-test")
+        hits = await fn("alice")
+
+    assert len(hits) == 2  # citations from the second-attempt SSE
+    # Two requests issued — first 429, second OK.
+    assert len(httpx_mock.get_requests()) == 2
 
 
 def test_websearchhit_is_immutable() -> None:
