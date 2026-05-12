@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 
 from reckora.agent import AgentLoop, Researcher, ToolBudget
+from reckora.auth.storage import load_credentials
 from reckora.collectors.base import Collector
 from reckora.collectors.breach import BreachCollector
 from reckora.collectors.doc_leak import DocLeakCollector
@@ -22,6 +26,11 @@ from reckora.persistence.repository import SavedDossier, SubjectRepository
 from reckora.reasoning.client import ReasoningClient
 from reckora.reasoning.hypothesize import hypothesize
 from reckora.reasoning.summarize import summarize
+from reckora.reasoning.web_search import (
+    WebSearchFn,
+    WebSearchUnavailableError,
+    make_web_search_fn,
+)
 from reckora.reports.html import to_dossier_html
 from reckora.reports.json_export import to_dossier_dict
 from reckora.reports.markdown import to_dossier_md
@@ -89,7 +98,10 @@ def _build_breach_collector() -> Collector:
     return BreachCollector(api_key=engine_settings.hibp_api_key)
 
 
-def _build_doc_leak_collector() -> Collector:
+def _build_doc_leak_collector(
+    *,
+    web_search_fn: WebSearchFn | None = None,
+) -> Collector:
     """Construct the public-doc-leak collector for a single request.
 
     Probed alongside HIBP under the same ``breach: true`` toggle: HIBP
@@ -97,10 +109,53 @@ def _build_doc_leak_collector() -> Collector:
     collector probes public document-share / paste sites for the seed
     identifier (username + email) to surface user-uploaded leaks.
 
+    ``web_search_fn`` lets the eight SPA / anti-bot platforms (scribd,
+    slideshare, issuu, 4shared, calameo, docplayer, dokumen.tips,
+    anyflip) route their searches through OpenAI's Responses
+    ``web_search`` tool instead of emitting ``unverified`` traces.
+    ``None`` keeps the direct-probe-only behaviour the CLI uses when
+    no auth backend is configured.
+
     Pulled out as a module-level helper so tests can monkeypatch it
     (mirroring ``_build_breach_collector``).
     """
-    return DocLeakCollector()
+    return DocLeakCollector(web_search_fn=web_search_fn)
+
+
+@asynccontextmanager
+async def _web_search_backend(*, enabled: bool) -> AsyncIterator[WebSearchFn | None]:
+    """Resolve a :data:`WebSearchFn` for the doc-leak collector.
+
+    Mirrors :func:`reckora.cli._web_search_backend`: yields ``None``
+    when the caller hasn't opted in (``enabled=False``) or no credential
+    is configured on the server, so the doc-leak collector falls back
+    to its direct-probe-only mode. Otherwise owns an
+    :class:`httpx.AsyncClient` for the lifetime of the investigation
+    so the eight SPA-platform probes can share one connection pool to
+    ``api.openai.com`` / ``chatgpt.com``.
+
+    Resolution order matches the CLI: ``OPENAI_API_KEY`` first, then
+    on-disk ChatGPT OAuth credentials saved by ``reckora auth login``.
+    """
+    if not enabled:
+        yield None
+        return
+    api_key = engine_settings.openai_api_key or None
+    creds = load_credentials()
+    if not api_key and creds is None:
+        yield None
+        return
+    async with httpx.AsyncClient() as client:
+        try:
+            fn = make_web_search_fn(
+                client=client,
+                api_key=api_key,
+                oauth_credentials=creds,
+            )
+        except WebSearchUnavailableError:
+            yield None
+            return
+        yield fn
 
 
 router = APIRouter(tags=["investigations"])
@@ -147,22 +202,33 @@ async def create_investigation(
     screenshotter: Screenshotter | None = (
         _build_screenshotter(api_settings) if payload.screenshot else None
     )
-    extra_collectors: list[Collector] = (
-        [_build_breach_collector(), _build_doc_leak_collector()] if payload.breach else []
-    )
-    try:
-        subject, traces, edges = await orchestrator.investigate(
-            seed,
-            extra_identifiers=extras,
-            extra_collectors=extra_collectors,
-            archiver=archiver,
-            screenshotter=screenshotter,
+    # The ``web_search_fn`` lifetime must wrap ``orchestrator.investigate``
+    # because :class:`DocLeakCollector` invokes it during collection. We
+    # only resolve a backend when ``breach`` is on; otherwise the context
+    # manager short-circuits to ``None`` and the orchestrator path is
+    # unchanged for stock investigations.
+    async with _web_search_backend(enabled=payload.breach) as web_search_fn:
+        extra_collectors: list[Collector] = (
+            [
+                _build_breach_collector(),
+                _build_doc_leak_collector(web_search_fn=web_search_fn),
+            ]
+            if payload.breach
+            else []
         )
-    finally:
-        for resource in (archiver, screenshotter):
-            close = getattr(resource, "aclose", None)
-            if close is not None:
-                await close()
+        try:
+            subject, traces, edges = await orchestrator.investigate(
+                seed,
+                extra_identifiers=extras,
+                extra_collectors=extra_collectors,
+                archiver=archiver,
+                screenshotter=screenshotter,
+            )
+        finally:
+            for resource in (archiver, screenshotter):
+                close = getattr(resource, "aclose", None)
+                if close is not None:
+                    await close()
 
     summary_md: str | None = None
     hypotheses_md: str | None = None

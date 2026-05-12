@@ -118,6 +118,136 @@ def test_create_investigation_with_breach_flag(authed_client: TestClient) -> Non
     assert breach_traces[0]["fields"]["breach_count"] == 1
 
 
+def test_create_investigation_breach_wires_web_search_fn_when_credentialed(
+    authed_client: TestClient,
+) -> None:
+    """``breach: true`` resolves a web-search backend and threads it into doc-leak.
+
+    The CLI's `--breach` path passes a :data:`WebSearchFn` resolved from
+    ``OPENAI_API_KEY`` or ChatGPT OAuth into :class:`DocLeakCollector` so
+    the eight SPA / anti-bot platforms can route their searches through
+    OpenAI's Responses ``web_search`` tool. This test asserts the HTTP
+    API does the same: when the server has at least one auth backend
+    configured, ``_build_doc_leak_collector`` receives a non-``None``
+    ``web_search_fn`` keyword argument rather than the bare default.
+
+    We monkeypatch :func:`reckora.auth.storage.load_credentials` to
+    return a fake OAuth credential (mirroring ``reckora auth login``)
+    and stub ``_build_doc_leak_collector`` / ``_build_breach_collector``
+    so the test never goes to the network.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from reckora.auth.oauth import OAuthCredentials
+    from reckora.collectors.base import Collector
+    from reckora.models.entity import Identifier
+
+    captured: dict[str, object] = {}
+
+    class _NoopCollector(Collector):
+        name = "noop"
+        supported = frozenset({"username", "email"})
+
+        async def collect(self, identifier: Identifier) -> list[Trace]:
+            return []
+
+    def _capture_doc_leak(*, web_search_fn: object = None) -> Collector:
+        captured["web_search_fn"] = web_search_fn
+        return _NoopCollector()
+
+    fake_creds = OAuthCredentials(
+        access_token="fake-access",
+        refresh_token="fake-refresh",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        id_token=None,
+    )
+
+    with (
+        patch(
+            "reckora_api.investigations.routes.load_credentials",
+            return_value=fake_creds,
+        ),
+        patch(
+            "reckora_api.investigations.routes._build_doc_leak_collector",
+            side_effect=_capture_doc_leak,
+        ),
+        patch(
+            "reckora_api.investigations.routes._build_breach_collector",
+            return_value=_NoopCollector(),
+        ),
+    ):
+        response = authed_client.post(
+            "/api/v1/investigations",
+            json={
+                "seed": {"kind": "email", "value": "alice@example.com"},
+                "breach": True,
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert "web_search_fn" in captured, "_build_doc_leak_collector was not called"
+    assert captured["web_search_fn"] is not None, (
+        "doc-leak collector was constructed without a web_search_fn; the eight "
+        "SPA / anti-bot platforms would emit `unverified` traces."
+    )
+
+
+def test_create_investigation_breach_passes_none_when_unconfigured(
+    authed_client: TestClient,
+) -> None:
+    """No auth backend → ``_build_doc_leak_collector`` gets ``web_search_fn=None``.
+
+    Mirrors the CLI's behaviour: the doc-leak collector falls back to
+    direct-probe-only mode (archive.org, pdfcoffee, yumpu, pastebin)
+    rather than raising, so a breach investigation still completes on
+    hosts without an OpenAI key or ChatGPT OAuth session.
+    """
+    from reckora.collectors.base import Collector
+    from reckora.models.entity import Identifier
+
+    captured: dict[str, object] = {}
+
+    class _NoopCollector(Collector):
+        name = "noop"
+        supported = frozenset({"username", "email"})
+
+        async def collect(self, identifier: Identifier) -> list[Trace]:
+            return []
+
+    def _capture_doc_leak(*, web_search_fn: object = None) -> Collector:
+        captured["web_search_fn"] = web_search_fn
+        return _NoopCollector()
+
+    with (
+        patch(
+            "reckora_api.investigations.routes.load_credentials",
+            return_value=None,
+        ),
+        patch(
+            "reckora_api.investigations.routes.engine_settings",
+        ) as engine_settings_mock,
+        patch(
+            "reckora_api.investigations.routes._build_doc_leak_collector",
+            side_effect=_capture_doc_leak,
+        ),
+        patch(
+            "reckora_api.investigations.routes._build_breach_collector",
+            return_value=_NoopCollector(),
+        ),
+    ):
+        engine_settings_mock.openai_api_key = None
+        response = authed_client.post(
+            "/api/v1/investigations",
+            json={
+                "seed": {"kind": "email", "value": "alice@example.com"},
+                "breach": True,
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert captured.get("web_search_fn") is None
+
+
 def test_create_investigation_with_screenshot_flag(authed_client: TestClient) -> None:
     """`screenshot: true` swaps the orchestrator's screenshotter for a fake.
 
