@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Arc Testnet Automation</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <script src="./ethers.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">Burner-only toolkit</p>
+      <h1>Arc Testnet Automation</h1>
+      <p class="sub">Runs the validated Arc testnet actions with simulation, exact approvals, and local-only secrets.</p>
+    </div>
+    <button id="connectInjected" type="button">Connect Wallet</button>
+  </header>
+
+  <main>
+    <section class="card warn">
+      <h2>Safety</h2>
+      <ul>
+        <li>Use a burner private key only. Never paste a seed phrase.</li>
+        <li>The private key is kept in browser memory unless you explicitly run a transaction.</li>
+        <li>Every task simulates before sending. Approvals are exact amounts, not unlimited.</li>
+        <li>Micro3/Arkada wrappers are links only because they require sign-in / claim verification.</li>
+      </ul>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h2>Signer</h2>
+        <label>RPC URL</label>
+        <input id="rpcUrl" value="https://rpc.testnet.arc.network" />
+
+        <label>Burner private key (runtime only)</label>
+        <input id="privateKey" type="password" placeholder="0x..." autocomplete="off" />
+        <div class="row">
+          <button id="usePrivateKey" type="button">Use Burner Key</button>
+          <button id="forgetSigner" type="button" class="secondary">Forget</button>
+        </div>
+        <p id="signerStatus" class="muted">No signer connected.</p>
+      </div>
+
+      <div class="card">
+        <h2>Balances</h2>
+        <div class="row">
+          <button id="refreshBalances" type="button">Refresh</button>
+          <button id="exportLog" type="button" class="secondary">Export Log</button>
+        </div>
+        <pre id="balances">Not loaded.</pre>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="task-head">
+        <div>
+          <h2>Validated automation tasks</h2>
+          <p class="muted">Select tasks, then run. Daily tasks may revert if already completed today.</p>
+        </div>
+        <div class="row">
+          <button id="selectSafe" type="button" class="secondary">Select daily-safe</button>
+          <button id="runSelected" type="button">Run selected</button>
+        </div>
+      </div>
+      <div id="taskList" class="tasks"></div>
+    </section>
+
+    <section class="card activity-card">
+      <div class="task-head">
+        <div>
+          <h2>Activity Mode</h2>
+          <p class="muted">Controlled loop for testnet onchain activity. Uses limits, delay, exact approvals, and stop-on-error.</p>
+        </div>
+        <div class="row">
+          <button id="startActivity" type="button">Start Activity</button>
+          <button id="stopActivity" type="button" class="secondary" disabled>Stop</button>
+        </div>
+      </div>
+
+      <div class="activity-grid">
+        <label>Max transactions
+          <input id="activityMaxTx" type="number" min="1" max="100" value="10" />
+        </label>
+        <label>Delay between tx (seconds)
+          <input id="activityDelay" type="number" min="3" max="3600" value="20" />
+        </label>
+        <label>Max native gas budget (USDC)
+          <input id="activityBudget" type="number" min="0.01" step="0.01" value="2" />
+        </label>
+        <label>Transfer self amount (USDC)
+          <input id="activityTransferAmount" type="number" min="0.000001" step="0.000001" value="0.001" />
+        </label>
+        <label>Swap amount (USDC/EURC)
+          <input id="activitySwapAmount" type="number" min="0.000001" step="0.000001" value="0.001" />
+        </label>
+        <label>ScoreMint fee/value (native USDC)
+          <input id="activityMintFee" type="number" min="0.01" step="0.01" value="0.1" />
+        </label>
+      </div>
+
+      <div class="checks">
+        <label><input type="checkbox" id="loopGm" checked /> GM / check-in style calls</label>
+        <label><input type="checkbox" id="loopTransfer" checked /> USDC transfer-to-self</label>
+        <label><input type="checkbox" id="loopSwap" checked /> Curve USDC ↔ EURC swap</label>
+        <label><input type="checkbox" id="loopMint" checked /> zkCodex ScoreMint update</label>
+      </div>
+      <p id="activityStatus" class="muted">Idle.</p>
+    </section>
+
+    <section class="card">
+      <h2>Quest wrappers / manual claims</h2>
+      <div class="links">
+        <a href="https://micro3.io/campaign/arc-testnet-series" target="_blank" rel="noreferrer">Micro3 Arc Testnet Series</a>
+        <a href="https://micro3.io/quest/arc-public-testnet-6589e286" target="_blank" rel="noreferrer">Micro3 Arc Public Testnet Quest</a>
+        <a href="https://app.arkada.gg/en/campaign/arc-sufrlayer" target="_blank" rel="noreferrer">Arkada SurfLayer</a>
+        <a href="https://app.arkada.gg/en/campaign/arc-nfts2me" target="_blank" rel="noreferrer">Arkada NFTs2Me</a>
+      </div>
+      <p class="muted">These pages require platform sign-in / verify-wallet / claim clicks; this APK opens the links but does not bypass auth gates.</p>
+    </section>
+
+    <section class="card">
+      <h2>Run log</h2>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
