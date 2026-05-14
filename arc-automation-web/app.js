@@ -107,60 +107,88 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function dailyStorageKey(taskId) {
+  return `arc-automation-daily:${signerAddress.toLowerCase()}:${taskId}:${todayKey()}`;
+}
+
+function isDailyDone(taskId) {
+  return Boolean(signerAddress && localStorage.getItem(dailyStorageKey(taskId)));
+}
+
+function markDailyDone(taskId, txHash) {
+  localStorage.setItem(dailyStorageKey(taskId), JSON.stringify({ txHash, at: new Date().toISOString() }));
+}
+
+async function runTask(task) {
+  if (task.frequency === "daily" && isDailyDone(task.id)) {
+    log(`SKIP ${task.title}: already completed locally today for ${signerAddress}`);
+    return null;
+  }
+  const result = await task.run();
+  if (task.frequency === "daily") {
+    markDailyDone(task.id, result || "ok");
+  }
+  return result;
+}
+
 const tasks = [
   {
     id: "balance",
     title: "Balance check",
-    dailySafe: true,
+    frequency: "utility",
     desc: "Reads native USDC, ERC-20 USDC, and EURC balances.",
     run: refreshBalances
   },
   {
     id: "arcGm",
     title: "Arc GM Portal",
-    dailySafe: true,
-    desc: "Calls sayGM() on the verified Arc GM portal contract.",
+    frequency: "daily",
+    desc: "Daily 1x/day: calls sayGM() on the verified Arc GM portal contract.",
     run: async () => sendTx("Arc GM Portal", new ethers.Contract("0x99eD064801Efbb050edFd99a1DFB57fe12A25C92", ["function sayGM()"], getProvider()), "sayGM")
   },
   {
     id: "zkGm",
     title: "zkCodex GM",
-    dailySafe: true,
-    desc: "Calls sayGM() on zkCodex Arc GM contract.",
+    frequency: "daily",
+    desc: "Daily 1x/day: calls sayGM() on zkCodex Arc GM contract.",
     run: async () => sendTx("zkCodex GM", new ethers.Contract("0x1290B4f2a419A316467b580a088453a233e9ADCc", ["function sayGM()"], getProvider()), "sayGM")
   },
   {
     id: "onChainGm",
     title: "OnChainGM",
-    dailySafe: true,
-    desc: "Calls onChainGM() with the known 0.5 native USDC fee.",
+    frequency: "daily",
+    desc: "Daily 1x/day: calls onChainGM() with the known 0.5 native USDC fee.",
     run: async () => sendTx("OnChainGM", new ethers.Contract("0x363cC75a89aE5673b427a1Fa98AFc48FfDE7Ba43", ["function onChainGM() payable"], getProvider()), "onChainGM", [], { value: ethers.parseEther("0.5") })
   },
   {
     id: "zkCounter",
     title: "zkCodex Counter",
-    dailySafe: true,
-    desc: "Increments zkCodex counter with exact 0.01 native USDC fee.",
+    frequency: "loopable",
+    desc: "Loopable: increments zkCodex counter with exact 0.01 native USDC fee.",
     run: async () => sendTx("zkCodex Counter", new ethers.Contract("0xfcF1E3e7890559c56013457e7073791ed27060a1", ["function incrementCounter() payable"], getProvider()), "incrementCounter", [], { value: ethers.parseEther("0.01") })
   },
   {
     id: "zkScore",
     title: "zkCodex ScoreMint",
-    dailySafe: false,
-    desc: "Sets a score with exact 0.1 native USDC fee.",
+    frequency: "loopable",
+    desc: "Loopable update: sets/updates a score with exact native USDC fee.",
     run: async () => sendTx("zkCodex ScoreMint", new ethers.Contract("0x705dB56640869439bF813b856a0fa944c6e2e8C4", ["function setScore(uint32,string) payable"], getProvider()), "setScore", [1, `arc-auto-${Date.now()}`], { value: ethers.parseEther("0.1") })
   },
   {
     id: "arcWorldKey",
     title: "ArcWorld Key NFT",
-    dailySafe: false,
-    desc: "Mints one ArcWorld Key NFT. Contract enforces wallet limit.",
+    frequency: "one-time",
+    desc: "One-time/contract-limited: mints one ArcWorld Key NFT.",
     run: async () => sendTx("ArcWorld Key", new ethers.Contract("0x8621c6775335Ac1511f1787093153801DEf834C5", ["function mint(uint256)"], getProvider()), "mint", [1])
   },
   {
     id: "arcWorldPassport",
     title: "ArcWorld Passport",
-    dailySafe: false,
+    frequency: "one-time",
     desc: "Approves exactly 1 USDC, then creates an on-chain passport record.",
     run: async () => {
       const service = "0xb6496BD90611402B53B69cA48Cd956DbcA8BD57e";
@@ -172,15 +200,15 @@ const tasks = [
   {
     id: "arcWorldTransferSelf",
     title: "ArcWorld quick transfer self",
-    dailySafe: true,
-    desc: "Sends 0.001 USDC to the same wallet to exercise ArcWorld quick-transfer style flow.",
+    frequency: "loopable",
+    desc: "Loopable: sends USDC to the same wallet to exercise transfer activity.",
     run: async () => sendTx("USDC transfer self", new ethers.Contract(USDC, ERC20_ABI, getProvider()), "transfer", [signerAddress, 1000n])
   },
   {
     id: "surfGm",
     title: "SurfLayer Daily GM",
-    dailySafe: true,
-    desc: "Reads gasFee() then calls dailyGM() with exact value.",
+    frequency: "daily",
+    desc: "Daily 1x/day: reads gasFee() then calls dailyGM() with exact value.",
     run: async () => {
       const c = new ethers.Contract("0xfceABEed1942559aF3080146A0B17758bEb28655", ["function gasFee() view returns (uint256)", "function dailyGM() payable"], getProvider());
       const fee = await c.gasFee();
@@ -190,8 +218,8 @@ const tasks = [
   {
     id: "surfDeploy",
     title: "SurfLayer Deploy",
-    dailySafe: false,
-    desc: "Reads gasFee() then calls deploy() with exact value.",
+    frequency: "optional",
+    desc: "Optional deploy-style action: reads gasFee() then calls deploy() with exact value.",
     run: async () => {
       const c = new ethers.Contract("0x50d9083c57216A64F74fA6f25D5a8a6bFFaCCe67", ["function gasFee() view returns (uint256)", "function deploy() payable"], getProvider());
       const fee = await c.gasFee();
@@ -199,16 +227,6 @@ const tasks = [
     }
   }
 ];
-
-function makeGmActivity() {
-  const gmTasks = tasks.filter((task) => ["arcGm", "zkGm", "zkCounter", "surfGm"].includes(task.id));
-  let cursor = 0;
-  return async () => {
-    const task = gmTasks[cursor % gmTasks.length];
-    cursor += 1;
-    await task.run();
-  };
-}
 
 function makeTransferActivity() {
   return async () => {
@@ -255,7 +273,6 @@ function makeMintActivity() {
 
 function buildActivityActions() {
   const actions = [];
-  if ($("loopGm").checked) actions.push({ label: "GM", run: makeGmActivity() });
   if ($("loopTransfer").checked) actions.push({ label: "transfer", run: makeTransferActivity() });
   if ($("loopSwap").checked) actions.push({ label: "swap", run: makeSwapActivity() });
   if ($("loopMint").checked) actions.push({ label: "mint", run: makeMintActivity() });
@@ -267,7 +284,7 @@ async function runActivityMode() {
   const actions = buildActivityActions();
   if (!actions.length) return log("Activity Mode: no action type selected.");
   const maxTx = Math.min(100, Math.floor(parsePositiveNumber("activityMaxTx", 10)));
-  const delayMs = Math.max(3000, Math.floor(parsePositiveNumber("activityDelay", 20) * 1000));
+  const delayMs = Math.max(10000, Math.floor(parsePositiveNumber("activityDelay", 30) * 1000));
   const budget = ethers.parseEther(parsePositiveNumber("activityBudget", 2).toString());
   const startBalance = await readNativeBalance();
   activityStopRequested = false;
@@ -334,7 +351,8 @@ function renderTasks() {
         <strong>${task.title}</strong>
       </label>
       <small>${task.desc}</small>
-      <span class="badge">${task.dailySafe ? "daily-safe" : "optional / may cost more"}</span>
+      <span class="badge ${task.frequency}">${task.frequency}</span>
+      ${task.frequency === "daily" && isDailyDone(task.id) ? '<span class="badge done">done today</span>' : ''}
     </div>
   `).join("");
 }
@@ -348,7 +366,7 @@ async function runSelected() {
       const task = tasks.find((item) => item.id === id);
       try {
         log(`START ${task.title}`);
-        await task.run();
+        await runTask(task);
         log(`DONE ${task.title}`);
       } catch (err) {
         log(`FAILED ${task.title}: ${err.shortMessage || err.message || err}`);
@@ -412,7 +430,7 @@ $("stopActivity").addEventListener("click", () => {
 $("selectSafe").addEventListener("click", () => {
   document.querySelectorAll("[data-task]").forEach((el) => {
     const task = tasks.find((item) => item.id === el.dataset.task);
-    el.checked = Boolean(task?.dailySafe);
+    el.checked = Boolean(task && ["daily", "loopable", "utility"].includes(task.frequency) && !(task.frequency === "daily" && isDailyDone(task.id)));
   });
 });
 

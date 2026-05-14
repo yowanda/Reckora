@@ -12,7 +12,7 @@
     <div>
       <p class="eyebrow">Burner-only toolkit</p>
       <h1>Arc Testnet Automation</h1>
-      <p class="sub">Runs the validated Arc testnet actions with simulation, exact approvals, and local-only secrets.</p>
+      <p class="sub">Runs validated Arc testnet actions with daily guards, simulation, exact approvals, and local-only secrets.</p>
     </div>
     <button id="connectInjected" type="button">Connect Wallet</button>
   </header>
@@ -23,6 +23,8 @@
       <ul>
         <li>Use a burner private key only. Never paste a seed phrase.</li>
         <li>The private key is kept in browser memory unless you explicitly run a transaction.</li>
+        <li>Daily GM/check-in tasks are locally limited to 1x/day per wallet.</li>
+        <li>Loop mode only uses repeatable activity actions: transfer self, Curve swap, and ScoreMint update.</li>
         <li>Every task simulates before sending. Approvals are exact amounts, not unlimited.</li>
         <li>Micro3/Arkada wrappers are links only because they require sign-in / claim verification.</li>
       </ul>
@@ -57,7 +59,7 @@
       <div class="task-head">
         <div>
           <h2>Validated automation tasks</h2>
-          <p class="muted">Select tasks, then run. Daily tasks may revert if already completed today.</p>
+          <p class="muted">Select tasks, then run. Daily tasks are blocked locally after one successful run per wallet/day.</p>
         </div>
         <div class="row">
           <button id="selectSafe" type="button" class="secondary">Select daily-safe</button>
@@ -71,7 +73,7 @@
       <div class="task-head">
         <div>
           <h2>Activity Mode</h2>
-          <p class="muted">Controlled loop for testnet onchain activity. Uses limits, delay, exact approvals, and stop-on-error.</p>
+          <p class="muted">Controlled loop for repeatable testnet activity. Daily GM/check-in tasks are intentionally excluded.</p>
         </div>
         <div class="row">
           <button id="startActivity" type="button">Start Activity</button>
@@ -84,7 +86,7 @@
           <input id="activityMaxTx" type="number" min="1" max="100" value="10" />
         </label>
         <label>Delay between tx (seconds)
-          <input id="activityDelay" type="number" min="3" max="3600" value="20" />
+          <input id="activityDelay" type="number" min="10" max="3600" value="30" />
         </label>
         <label>Max native gas budget (USDC)
           <input id="activityBudget" type="number" min="0.01" step="0.01" value="2" />
@@ -101,7 +103,6 @@
       </div>
 
       <div class="checks">
-        <label><input type="checkbox" id="loopGm" checked /> GM / check-in style calls</label>
         <label><input type="checkbox" id="loopTransfer" checked /> USDC transfer-to-self</label>
         <label><input type="checkbox" id="loopSwap" checked /> Curve USDC ↔ EURC swap</label>
         <label><input type="checkbox" id="loopMint" checked /> zkCodex ScoreMint update</label>
