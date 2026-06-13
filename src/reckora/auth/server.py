@@ -24,6 +24,7 @@ Implementation notes:
 from __future__ import annotations
 
 import contextlib
+import html
 import socket
 import threading
 from collections.abc import Iterator
@@ -229,7 +230,8 @@ class CallbackServer:
         handler.send_response(400)
         handler.send_header("Content-Type", "text/html; charset=utf-8")
         handler.end_headers()
-        handler.wfile.write(_ERROR_HTML_TEMPLATE.format(message=message).encode("utf-8"))
+        safe_message = html.escape(message, quote=True)
+        handler.wfile.write(_ERROR_HTML_TEMPLATE.format(message=safe_message).encode("utf-8"))
 
 
 def is_port_free(port: int, *, host: str = "127.0.0.1") -> bool:
