@@ -13,7 +13,7 @@
 #   cp deploy/.env.example .env
 #   # edit DOMAIN + RECKORA_API_JWT_SECRET
 #   docker compose up -d --build
-#   docker compose exec api reckora-api auth create-user --role admin
+#   docker compose exec api reckora-api create-user admin --password 'change-this-password'
 #
 # See ``DEPLOY.md`` for a full walk-through (firewall, DNS, ops).
 
