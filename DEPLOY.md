@@ -151,11 +151,13 @@ The API ships with no users by default; the first one has to be
 created from inside the container:
 
 ```bash
-docker compose exec api reckora-api auth create-user --role admin
-# email:    you@example.com
-# password: ********
-# (interactive prompts)
+docker compose exec api reckora-api create-user admin --password 'change-this-password'
+# created user admin (id=..., role=admin)
 ```
+
+If you omit `--password`, the CLI prompts for it interactively. The
+command creates an admin by default; pass `--viewer` only when creating
+a restricted viewer account.
 
 Log in via the SPA at `https://reckora.example.com/login` and run a
 sample investigation to confirm the engine + reasoning + reporting
@@ -219,4 +221,4 @@ serves a small team's investigation workload.
 | `dial tcp 0.0.0.0:80: bind: address already in use` | Another web server is bound on port 80. Stop it before bringing the stack up. |
 | Cert issuance loops | DNS A record points at the wrong IP, or the cloud-provider firewall is blocking 80/443. Verify with `dig` + `nc -zv <ip> 80`. |
 | Permission errors on `/data` | The volume was created with the wrong UID. Clear it (`docker volume rm reckora_data`) and let compose recreate it. |
-| `reckora-api auth create-user` refuses to run | Your `.env` lacks `RECKORA_API_JWT_SECRET` or it's shorter than 32 bytes. Generate a new one and `docker compose up -d api`. |
+| `reckora-api create-user` refuses to run | Your `.env` lacks `RECKORA_API_JWT_SECRET` or it's shorter than 32 bytes. Generate a new one and `docker compose up -d api`. |
