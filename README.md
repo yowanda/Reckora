@@ -72,7 +72,7 @@ Every dossier — markdown / HTML / JSON / NDJSON / PDF — carries `## Timeline
 The FastAPI backend (`apps/api/reckora_api`) wraps the same engine. JWT bearer auth; OpenAPI at `/openapi.json`, Swagger at `/docs`, health at `/healthz`.
 
 ```bash
-export RECKORA_API_JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export RECKORA_API_JWT_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
 reckora-api create-user root  --password 'supersecret123'             # admin
 reckora-api create-user alice --password 'alicepassword1' --viewer    # viewer
 reckora-api serve --host 127.0.0.1 --port 8000

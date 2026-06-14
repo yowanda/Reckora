@@ -103,6 +103,31 @@ def test_callback_server_propagates_oauth_error(
     assert result.error == "user cancelled"
 
 
+def test_callback_server_escapes_oauth_error_html(
+    server_with_state: tuple[CallbackServer, int],
+) -> None:
+    """The browser error page escapes OAuth error text, but result stays raw."""
+    server, port = server_with_state
+    body_holder: dict[str, str] = {}
+
+    def _drive() -> None:
+        _, body = _hit(
+            f"http://127.0.0.1:{port}/auth/callback?"
+            "error=access_denied&"
+            "error_description=%3Cscript%3Ealert(1)%3C%2Fscript%3E"
+        )
+        body_holder["body"] = body
+
+    thread = threading.Thread(target=_drive, daemon=True)
+    thread.start()
+    result = server.wait(timeout=5.0)
+    thread.join(timeout=5.0)
+
+    assert result.error == "<script>alert(1)</script>"
+    assert "<script>alert(1)</script>" not in body_holder["body"]
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body_holder["body"]
+
+
 def test_callback_server_handles_missing_code(
     server_with_state: tuple[CallbackServer, int],
 ) -> None:
