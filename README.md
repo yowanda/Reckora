@@ -94,11 +94,12 @@ curl -s -H "authorization: Bearer $TOKEN" \
 
 ### Endpoints
 
-All under `/api/v1`; all require `Authorization: Bearer <token>` except `/auth/register` and `/auth/token`.
+All under `/api/v1`; all require `Authorization: Bearer <token>` except `/auth/register`, `/auth/token`, and the `/auth/oauth/*` flow.
 
 | Group | Endpoints |
 |---|---|
 | Auth & users | `POST /auth/register`, `POST /auth/token`, `GET /auth/me`, `GET /users`, `PATCH /users/{id}/role` |
+| OAuth (social login) | `GET /auth/oauth/providers`, `GET /auth/oauth/github/login`, `GET /auth/oauth/github/callback` |
 | Investigations | `POST /investigations` (flags: `archive`, `screenshot`, `ai`, `breach`, `anchor`) |
 | Dossiers | `GET /subjects` · `GET /subjects/{id}` · `GET /subjects/{id}/dossier?format=html\|json\|md\|pdf` · `DELETE /subjects/{id}` |
 | Sharing | `POST /subjects/{id}/share`, `DELETE /subjects/{id}/share/{user_id}` |
@@ -131,6 +132,10 @@ All under `/api/v1`; all require `Authorization: Bearer <token>` except `/auth/r
 | `HIBP_API_KEY` | _(unset)_ | enables `--breach` / `breach: true` |
 | `ETHERSCAN_API_KEY` | _(unset)_ | lifts the anonymous tier rate limit |
 | `RECKORA_OPENAI_OAUTH_MODEL` | `gpt-5.5` | model used over ChatGPT OAuth |
+| `RECKORA_API_OAUTH_GITHUB_CLIENT_ID` | _(unset)_ | enables the "Sign in with GitHub" button on the SPA |
+| `RECKORA_API_OAUTH_GITHUB_CLIENT_SECRET` | _(unset)_ | GitHub OAuth App client secret; required when `CLIENT_ID` is set |
+| `RECKORA_API_OAUTH_GITHUB_REDIRECT_URL` | `http://localhost:8000/api/v1/auth/oauth/github/callback` | must match the redirect URI registered on the GitHub OAuth App |
+| `RECKORA_API_FRONTEND_URL` | `http://localhost:5173` | origin the OAuth callback redirects back to with the freshly-minted JWT in the URL fragment |
 
 ## Roadmap
 

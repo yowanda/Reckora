@@ -14,6 +14,7 @@ export type LabelCatalogEntry = Schemas["LabelCatalogEntry"];
 export type LabelEntry = Schemas["LabelEntry"];
 export type MentionEntry = Schemas["MentionEntry"];
 export type NoteEntry = Schemas["NoteEntry"];
+export type OAuthProvidersPublic = Schemas["OAuthProvidersPublic"];
 export type ReactionGroup = Schemas["ReactionGroup"];
 export type SavedDossierPayload = Schemas["SavedDossierPayload"];
 export type SavedDossierSummary = Schemas["SavedDossierSummary"];

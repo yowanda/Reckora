@@ -36,6 +36,7 @@ from reckora.persistence.sqlite import SQLiteSubjectRepository
 from reckora_api.access.repository import AccessRepository
 from reckora_api.access.routes import router as sharing_router
 from reckora_api.activity.routes import router as activity_router
+from reckora_api.auth.oauth_routes import router as oauth_router
 from reckora_api.auth.repository import UserRepository
 from reckora_api.auth.routes import router as auth_router
 from reckora_api.auth.routes import users_router as auth_users_router
@@ -140,6 +141,7 @@ def create_app(
         )
 
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(oauth_router, prefix="/api/v1")
     app.include_router(auth_users_router, prefix="/api/v1")
     app.include_router(investigations_router, prefix="/api/v1")
     app.include_router(sharing_router, prefix="/api/v1")

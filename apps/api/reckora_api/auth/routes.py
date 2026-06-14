@@ -24,6 +24,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel, ConfigDict
 
 from reckora_api.auth.models import (
     Role,
@@ -42,6 +43,28 @@ from reckora_api.deps import current_user, get_settings, get_user_repo, require_
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 users_router = APIRouter(prefix="/users", tags=["users"])
+
+
+class OAuthProvidersPublic(BaseModel):
+    """Which third-party login providers the server currently advertises.
+
+    The SPA fetches this anonymously on the login page so it can show
+    only the buttons whose providers are actually configured — there's
+    no point rendering "Sign in with GitHub" if the operator has not
+    set the GitHub client id and secret.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    github: bool
+
+
+@router.get("/oauth/providers", response_model=OAuthProvidersPublic)
+def list_oauth_providers(
+    settings: Annotated[APISettings, Depends(get_settings)],
+) -> OAuthProvidersPublic:
+    """Advertise the OAuth providers wired into this deployment."""
+    return OAuthProvidersPublic(github=settings.github_oauth_enabled)
 
 
 def _to_public(record: UserRecord) -> UserPublic:
