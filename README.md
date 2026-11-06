@@ -1,6 +1,16 @@
 # Reckora
 
+[![CI](https://github.com/yowanda/Reckora/actions/workflows/ci.yml/badge.svg)](https://github.com/yowanda/Reckora/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+
 AI-native OSINT investigation system. Entity resolution, evidence-graph reasoning, explainable intelligence.
+
+> **Status:** Alpha (v0.1.0). Actively developed and tested — 1,000+ tests, CI green on Python 3.11 and 3.12. The CLI and HTTP API are usable today; see [ROADMAP.md](./ROADMAP.md) for what's next.
+
+## Why Reckora
+
+Most OSINT tools return a pile of raw hits. Reckora resolves a seed — a username, email, domain, URL, phone number, or crypto wallet — into one explainable dossier: entities linked into an evidence graph, anomalies flagged, and every claim backed by a clickable source, a Wayback snapshot, or a forensic screenshot. Dossiers export as Markdown, HTML, JSON, NDJSON, or PDF, and the same engine is exposed over a FastAPI backend with JWT auth, RBAC, and collaboration (comments, labels, watchers, activity feed).
 
 ## Install
 
@@ -131,6 +141,10 @@ All under `/api/v1`; all require `Authorization: Bearer <token>` except `/auth/r
 | `HIBP_API_KEY` | _(unset)_ | enables `--breach` / `breach: true` |
 | `ETHERSCAN_API_KEY` | _(unset)_ | lifts the anonymous tier rate limit |
 | `RECKORA_OPENAI_OAUTH_MODEL` | `gpt-5.5` | model used over ChatGPT OAuth |
+
+## Contributing
+
+Issues and pull requests are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the dev setup, test/lint/type commands, and PR conventions.
 
 ## Roadmap
 
